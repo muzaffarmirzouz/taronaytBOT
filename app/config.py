@@ -61,7 +61,7 @@ class Config:
             anthropic_key=_env("ANTHROPIC_API_KEY"),
             claude_model=_env("CLAUDE_MODEL", "claude-sonnet-5-5"),
             openai_key=_env("OPENAI_API_KEY"),
-            image_model=_env("OPENAI_IMAGE_MODEL", "gpt-image-1"),
+            image_model=_env("OPENAI_IMAGE_MODEL", "gpt-image-2"),
             image_size=_env("OPENAI_IMAGE_SIZE", "1536x1024"),
             image_quality=_env("OPENAI_IMAGE_QUALITY", "medium"),
             yt_client_id=_env("YT_CLIENT_ID"),

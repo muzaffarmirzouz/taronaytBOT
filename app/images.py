@@ -14,19 +14,40 @@ STYLE_SUFFIX = (
 )
 
 
-def generate(cfg, prompt: str, out_path: Path) -> Path:
-    body = {
-        "model": cfg.image_model,
-        "prompt": (prompt + STYLE_SUFFIX)[:3800],
-        "size": cfg.image_size,
-        "n": 1,
-    }
-    if cfg.image_model.startswith("gpt-image") and cfg.image_quality:
+_working = {"model": ""}
+FALLBACK_MODELS = ["gpt-image-2", "gpt-image-1.5", "gpt-image-1-mini", "gpt-image-1"]
+
+
+def _post(cfg, model: str, prompt: str, with_quality: bool):
+    body = {"model": model, "prompt": (prompt + STYLE_SUFFIX)[:3800], "size": cfg.image_size, "n": 1}
+    if with_quality and model.startswith("gpt-image") and cfg.image_quality:
         body["quality"] = cfg.image_quality
     headers = {"Authorization": f"Bearer {cfg.openai_key}", "Content-Type": "application/json"}
-    resp = net.request("POST", API_URL, headers=headers, json=body, timeout=180)
+    return net.request("POST", API_URL, headers=headers, json=body, timeout=180)
+
+
+def generate(cfg, prompt: str, out_path: Path) -> Path:
+    # Model names get retired; try the configured one, then known alternatives.
+    candidates = []
+    for m in [_working["model"], cfg.image_model] + FALLBACK_MODELS:
+        if m and m not in candidates:
+            candidates.append(m)
+    resp, errors = None, []
+    for model in candidates:
+        for with_quality in (True, False):
+            resp = _post(cfg, model, prompt, with_quality)
+            if resp.status_code == 200:
+                _working["model"] = model
+                break
+            errors.append(f"{model}: {resp.status_code} {resp.text[:160]}")
+            if "quality" not in resp.text.lower():
+                break  # retry without quality only when quality was the complaint
+        if resp.status_code == 200:
+            break
+        if resp.status_code in (401, 429) or "billing" in resp.text.lower():
+            break  # key/limit problem: other models will not help
     if resp.status_code != 200:
-        raise RuntimeError(f"OpenAI images {resp.status_code}: {resp.text[:300]}")
+        raise RuntimeError("OpenAI images failed: " + " | ".join(errors[-3:]))
     item = (resp.json().get("data") or [{}])[0]
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

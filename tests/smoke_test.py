@@ -148,6 +148,22 @@ job_u = db.add_job("user", raw_text="y" * 30)
 pipe.produce(job_u)
 assert db.get(job_u)["status"] == "ready"
 
+# 3c) image model fallback: first model "does not exist" -> next one works
+from app import images  # noqa: E402
+_orig = net.request
+def _fake_img(method, url, **kw):
+    if "images/generations" in url:
+        if kw["json"]["model"] != "gpt-image-1.5":
+            return Resp(status=400, js={"error": {"message": "The model does not exist"}})
+        return Resp(js={"data": [{"b64_json": base64.b64encode(PNG.read_bytes()).decode()}]})
+    return _orig(method, url, **kw)
+net.request = _fake_img
+images._working["model"] = ""
+images.generate(cfg, "a cat", TMP / "x.png")
+assert images._working["model"] == "gpt-image-1.5" and (TMP / "x.png").exists()
+net.request = _orig
+images._working["model"] = ""
+
 # 4) queue priority: user jobs first
 db.update(job3, status="queued")
 ujob = db.add_job("user", raw_text="x" * 30)
