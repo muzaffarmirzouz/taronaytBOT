@@ -31,6 +31,12 @@ IDEAS = [
     ("gentle piano ballad", "a letter to a friend far away"),
     ("reggae-pop", "slow beach days and sun on your skin"),
     ("acoustic singer-songwriter", "growing up and looking back"),
+    ("club dance, four-on-the-floor EDM with catchy vocal hook", "losing yourself on the dance floor all night"),
+    ("afro house with warm percussion and smooth vocals", "sunset rooftop party and good vibes"),
+    ("deep house club, female vocal", "a stranger's eyes across the crowded room"),
+    ("amapiano-style dance groove", "weekend freedom and dancing with friends"),
+    ("future bass club anthem", "chasing the night until sunrise"),
+    ("tropical house", "summer festival and neon lights"),
 ]
 
 
