@@ -52,7 +52,7 @@ class Bot:
             try:
                 if not self.paused():
                     self.fill_stock()
-                    self.produce_next()
+                self.produce_next()
             except Exception:
                 log.exception("worker loop error")
             self.stop.wait(15)
@@ -67,6 +67,8 @@ class Bot:
         job = self.db.next_to_produce()
         if not job:
             return
+        if self.paused() and job["source"] != "user":
+            return  # pause stops automatic songs only; the owner's own songs still get made
         with self.produce_lock:
             try:
                 self.pipeline.produce(job["id"])

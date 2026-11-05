@@ -62,9 +62,11 @@ class Pipeline:
     def mureka_used_today(self) -> int:
         return int(self.db.kv_get(self._budget_key(), "0"))
 
-    def _check_budget(self) -> None:
-        if self.mureka_used_today() >= self.cfg.max_mureka_per_day:
-            raise BudgetExceeded(f"daily Mureka limit reached ({self.cfg.max_mureka_per_day})")
+    def _check_budget(self, source: str = "auto") -> None:
+        # The owner's own songs may go past the automatic daily cap, up to a hard ceiling.
+        limit = self.cfg.max_mureka_per_day + (10 if source == "user" else 0)
+        if self.mureka_used_today() >= limit:
+            raise BudgetExceeded(f"daily Mureka limit reached ({limit})")
 
     def _count_mureka(self) -> None:
         self.db.kv_set(self._budget_key(), str(self.mureka_used_today() + 1))
@@ -98,7 +100,7 @@ class Pipeline:
 
         mp3 = folder / "song.mp3"
         if not (job["mp3_path"] and Path(job["mp3_path"]).exists()):
-            self._check_budget()
+            self._check_budget(job["source"])
             result = mureka.generate(self.cfg, job["lyrics"], job["style"])
             self._count_mureka()
             mureka.download(result["url"], mp3)

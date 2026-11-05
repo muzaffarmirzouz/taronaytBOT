@@ -143,6 +143,11 @@ try:
 except Exception as exc:
     assert exc.__class__.__name__ == "BudgetExceeded", exc
 
+# 3b) the owner's own song may exceed the automatic cap
+job_u = db.add_job("user", raw_text="y" * 30)
+pipe.produce(job_u)
+assert db.get(job_u)["status"] == "ready"
+
 # 4) queue priority: user jobs first
 db.update(job3, status="queued")
 ujob = db.add_job("user", raw_text="x" * 30)
