@@ -1,0 +1,111 @@
+"""Claude writes lyrics, the Mureka style prompt, the image prompt and the
+YouTube metadata (English, tuned for a US audience)."""
+from __future__ import annotations
+
+import json
+import logging
+import re
+
+from . import net
+
+log = logging.getLogger("claude")
+
+API_URL = "https://api.anthropic.com/v1/messages"
+
+SYSTEM = """You are the creative engine behind an English-language AI music channel on YouTube aimed at a US audience.
+You write original songs and the metadata to publish them. Reply with ONE JSON object and nothing else."""
+
+SCHEMA_HELP = """Return a JSON object with exactly these keys:
+- "title": song title, max 45 characters.
+- "theme": 2-4 word label of the song's topic (used internally to avoid repeats).
+- "lyrics": full song lyrics in ENGLISH, at most 1800 characters, structured with section tags on their own line
+  like [Verse], [Pre-Chorus], [Chorus], [Bridge], [Outro]. Singable: consistent syllable counts, clean rhymes,
+  a memorable repeated hook in the chorus. Original wording only.
+- "style": music style prompt for the song generator, max 220 characters: genre, mood, tempo/BPM, vocal type
+  (e.g. warm male vocal / airy female vocal), 3-4 instruments. NEVER mention real artists, bands or songs.
+- "image_prompt": a vivid prompt for a 3:2 landscape illustration matching the song's mood (one clear scene, a
+  consistent art style). It must contain no text, letters, logos or watermarks and no real people or celebrities.
+- "yt_title": YouTube title, max 90 characters. Format like "<Song Title> (Official Lyric Video) | <Genre/Mood> Song".
+  Natural, appealing to US listeners, no clickbait lies.
+- "yt_description": 2-3 short paragraphs (what the song feels like, who it is for), then a line "Lyrics:" followed by
+  the full lyrics. Max 3000 characters in total.
+- "yt_tags": array of 12-18 search-friendly English tags (mix of broad and specific, e.g. genre, mood, "new song 2026",
+  "lyric video"). Each tag at most 30 characters."""
+
+
+def _extract_json(text: str) -> dict:
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end == -1:
+        raise ValueError("no JSON object in Claude reply")
+    return json.loads(text[start:end + 1])
+
+
+def _validate(data: dict) -> dict:
+    required = ["title", "lyrics", "style", "image_prompt", "yt_title", "yt_description", "yt_tags"]
+    for key in required:
+        if not data.get(key):
+            raise ValueError(f"missing field: {key}")
+    if "[" not in data["lyrics"]:
+        raise ValueError("lyrics have no section tags")
+    tags = data["yt_tags"]
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(",")]
+    data["yt_tags"] = [str(t).strip() for t in tags if str(t).strip()]
+    data["title"] = str(data["title"]).strip()[:50]
+    data["lyrics"] = str(data["lyrics"]).strip()[:4800]
+    data["style"] = str(data["style"]).strip()[:290]
+    data["yt_title"] = str(data["yt_title"]).strip()[:100]
+    data["yt_description"] = str(data["yt_description"]).strip()[:4000]
+    data["theme"] = str(data.get("theme", "")).strip()[:60]
+    return data
+
+
+def build_user_message(raw_text: str, theme: str, avoid_titles: list) -> str:
+    parts = []
+    if raw_text.strip():
+        parts.append(
+            "The channel owner supplied this text (it may be a poem or lyrics in any language, e.g. Uzbek). "
+            "Turn it into an ENGLISH song: keep its meaning, mood, story and imagery, but rewrite it so it sings "
+            "naturally in English with rhyme and rhythm (do not translate word for word). Add a chorus built from its "
+            "strongest line if it has none.\n\n--- TEXT ---\n" + raw_text.strip() + "\n--- END ---"
+        )
+    else:
+        genre, _, topic = (theme or "").partition("|")
+        parts.append(
+            "Write a brand-new original song.\n"
+            f"Genre/vibe: {genre.strip() or 'your choice'}\n"
+            f"Topic: {topic.strip() or genre.strip() or 'your choice'}"
+        )
+    if avoid_titles:
+        parts.append("Do NOT reuse or closely echo these recent titles: " + "; ".join(avoid_titles[:25]))
+    parts.append(SCHEMA_HELP)
+    return "\n\n".join(parts)
+
+
+def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | None = None) -> dict:
+    headers = {
+        "x-api-key": cfg.anthropic_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    body = {
+        "model": cfg.claude_model,
+        "max_tokens": 4000,
+        "system": SYSTEM,
+        "messages": [{"role": "user", "content": build_user_message(raw_text, theme, avoid_titles or [])}],
+    }
+    last_err = None
+    for attempt in range(3):
+        resp = net.request("POST", API_URL, headers=headers, json=body, timeout=120)
+        if resp.status_code != 200:
+            raise RuntimeError(f"Claude API {resp.status_code}: {resp.text[:300]}")
+        data = resp.json()
+        text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+        try:
+            return _validate(_extract_json(text))
+        except (ValueError, json.JSONDecodeError) as exc:
+            last_err = exc
+            log.warning("Claude reply invalid (attempt %s): %s", attempt + 1, exc)
+    raise RuntimeError(f"Claude returned invalid JSON 3 times: {last_err}")
