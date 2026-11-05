@@ -47,6 +47,14 @@ class Telegram:
             log.warning("sendAudio failed: %s", exc)
             return False
 
+    def send_buttons(self, text: str, buttons: list, chat_id: int | None = None) -> None:
+        """Message with one row of inline buttons [(label, callback_data), ...]."""
+        try:
+            self.call("sendMessage", chat_id=chat_id or self.admin_id, text=text,
+                      reply_markup={"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in buttons]]})
+        except Exception as exc:
+            log.warning("sendMessage(buttons) failed: %s", exc)
+
     def send_video(self, path, caption: str = "", buttons: list | None = None, chat_id: int | None = None) -> bool:
         """Upload a video (<=50 MB) with optional inline buttons [(text, callback_data), ...]. Never raises."""
         import json as _json

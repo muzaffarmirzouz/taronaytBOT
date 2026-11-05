@@ -19,7 +19,7 @@ log = logging.getLogger("bot")
 
 HELP = """🎵 Kunlik qo'shiq boti
 
-Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot uni inglizcha qo'shiqqa aylantirib, navbatning BOSHIGA qo'yadi.
+Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot tilni so'raydi (🇺🇿 o'zbekcha yoki 🇬🇧 inglizcha), keyin navbatsiz darhol qo'shiq qiladi va videoni tasdiqlash uchun yuboradi.
 
 /holat — navbat, keyingi joylash vaqti, bugungi sarf
 /navbat — oxirgi 10 ta qo'shiq
@@ -177,7 +177,7 @@ class Bot:
 
     def do_cancel(self, job_id: int, chat_id: int) -> None:
         job = self.db.get(job_id)
-        if job and job["status"] in ("queued", "ready", "review"):
+        if job and job["status"] in ("pending", "queued", "ready", "review"):
             self.db.update(job_id, status="failed", error="bekor qilindi")
             self.tg.send(f"#{job_id} bekor qilindi.", chat_id)
         else:
@@ -188,7 +188,22 @@ class Bot:
         if cb.get("from", {}).get("id") != self.cfg.admin_id:
             self.tg.answer_callback(cb["id"], "Bu bot yopiq.")
             return
-        action, _, raw = (cb.get("data") or "").partition(":")
+        data = cb.get("data") or ""
+        if data.startswith("lang:"):
+            _, lang, raw_id = (data.split(":") + ["", ""])[:3]
+            job = self.db.get(int(raw_id)) if raw_id.isdigit() and lang in ("uz", "en") else None
+            if not job or job["status"] != "pending":
+                self.tg.answer_callback(cb["id"], "Bu allaqachon boshlangan yoki bekor qilingan.")
+                return
+            self.db.kv_set(f"lang:{job['id']}", lang)
+            self.db.update(job["id"], status="queued")
+            self.wake.set()
+            name = "o'zbekcha" if lang == "uz" else "inglizcha"
+            self.tg.answer_callback(cb["id"], f"Boshlandi: {name}")
+            self.tg.send(f"🎶 #{job['id']} {name} qo'shiqqa aylantirilyapti. Tayyor bo'lganda videoni yuboraman "
+                         f"va joylash-joylamasligini so'rayman (2–5 daqiqa).", chat_id)
+            return
+        action, _, raw = data.partition(":")
         if not raw.isdigit():
             self.tg.answer_callback(cb["id"])
             return
@@ -222,6 +237,7 @@ class Bot:
             f"📊 Holat {'(⏸ to‘xtatilgan)' if self.paused() else '(▶️ ishlayapti)'}\n"
             f"Tayyor video: {db.count('ready')}\n"
             f"Tasdiq kutayotgan (sizniki): {db.count('review')}\n"
+            f"Til tanlashni kutayotgan: {db.count('pending')}\n"
             f"Tayyorlanmoqda/navbatda: {db.count('queued', 'producing')}\n"
             f"Joylangan: {db.count('posted')} · Xato: {db.count('failed')}\n"
             f"Keyingi joylash: {nxt.strftime('%Y-%m-%d %H:%M')} ({self.cfg.timezone})\n"
@@ -314,11 +330,11 @@ class Bot:
         if len(text) < 20:
             self.tg.send("Matn juda qisqa. Sher yoki qo'shiq so'zlarini to'liq yuboring (kamida 20 belgi).", chat_id)
             return
-        job_id = self.pipeline.db.add_job("user", raw_text=text)
-        self.wake.set()
-        self.tg.send(
-            f"🎤 Qabul qilindi #{job_id}. Inglizcha qo'shiqqa aylantiryapman, navbatsiz darhol ishlayman. "
-            f"Tayyor bo'lganda videoni yuboraman va joylash-joylamasligini so'rayman (2–5 daqiqa).", chat_id)
+        job_id = self.db.add_job("user", raw_text=text, status="pending")  # waits for the language choice
+        self.tg.send_buttons(
+            f"🎤 Matn qabul qilindi #{job_id}. Qo'shiq qaysi tilda bo'lsin?",
+            [("🇺🇿 O'zbekcha", f"lang:uz:{job_id}"), ("🇬🇧 Inglizcha", f"lang:en:{job_id}"),
+             ("❌ Bekor", f"del:{job_id}")], chat_id)
 
     def poll_loop(self) -> None:
         offset = None

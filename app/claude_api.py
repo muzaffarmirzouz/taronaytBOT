@@ -63,9 +63,27 @@ def _validate(data: dict) -> dict:
     return data
 
 
-def build_user_message(raw_text: str, theme: str, avoid_titles: list) -> str:
+UZBEK_BRIEF = (
+    "The owner chose UZBEK as the song language. Write the song in UZBEK (Latin script, natural modern Uzbek), "
+    "NOT in English. Keep the owner's own words, lines, imagery and story as much as possible: only lightly edit for "
+    "rhythm and rhyme, give it song structure with section tags, and build the chorus from its strongest line. "
+    "Do not translate it into English. Field rules for this song: \"title\" is a short Uzbek title; \"lyrics\" are "
+    "Uzbek; \"style\" stays in English for the music generator and MUST include 'Uzbek-language vocals'; "
+    "\"image_prompt\" stays in English; \"yt_title\" stays English-friendly, like '<Uzbek Title> (Official Lyric "
+    "Video) | Uzbek <Genre> Song'; \"yt_description\" starts with 1-2 English paragraphs (say it is an Uzbek-language "
+    "song from Central Asia and give a one-sentence English summary of what it says), then 'Lyrics:' followed by the "
+    "Uzbek lyrics; \"yt_tags\" stay English but must include 'uzbek song', 'uzbek music', 'central asian music'."
+)
+
+
+def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: str = "en") -> str:
     parts = []
-    if raw_text.strip():
+    if raw_text.strip() and language == "uz":
+        parts.append(
+            "The channel owner supplied this text (a poem or lyrics).\n" + UZBEK_BRIEF +
+            "\n\n--- TEXT ---\n" + raw_text.strip() + "\n--- END ---"
+        )
+    elif raw_text.strip():
         parts.append(
             "The channel owner supplied this text (it may be a poem or lyrics in any language, e.g. Uzbek). "
             "Turn it into an ENGLISH song: keep its meaning, mood, story and imagery, but rewrite it so it sings "
@@ -81,11 +99,15 @@ def build_user_message(raw_text: str, theme: str, avoid_titles: list) -> str:
         )
     if avoid_titles:
         parts.append("Do NOT reuse or closely echo these recent titles: " + "; ".join(avoid_titles[:25]))
-    parts.append(SCHEMA_HELP)
+    schema = SCHEMA_HELP
+    if language == "uz":
+        schema = schema.replace("full song lyrics in ENGLISH", "full song lyrics in UZBEK (Latin script)")
+    parts.append(schema)
     return "\n\n".join(parts)
 
 
-def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | None = None) -> dict:
+def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | None = None,
+                 language: str = "en") -> dict:
     headers = {
         "x-api-key": cfg.anthropic_key,
         "anthropic-version": "2023-06-01",
@@ -95,7 +117,7 @@ def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | 
         "model": cfg.claude_model,
         "max_tokens": 4000,
         "system": SYSTEM,
-        "messages": [{"role": "user", "content": build_user_message(raw_text, theme, avoid_titles or [])}],
+        "messages": [{"role": "user", "content": build_user_message(raw_text, theme, avoid_titles or [], language)}],
     }
     last_err = None
     for attempt in range(3):

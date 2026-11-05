@@ -43,6 +43,7 @@ PACKAGE = {
 }
 
 calls = []
+last_claude = {}
 poll_state = {"n": 0}
 
 
@@ -58,6 +59,7 @@ class Resp:
 def fake_request(method, url, **kw):
     calls.append((method, url))
     if "api.anthropic.com" in url:
+        last_claude["body"] = kw["json"]
         return Resp(js={"content": [{"type": "text", "text": "```json\n" + json.dumps(PACKAGE) + "\n```"}]})
     if url.endswith("/v1/song/generate"):
         assert kw["json"]["lyrics"] and kw["json"]["prompt"]
@@ -199,10 +201,12 @@ assert len([c for c in calls if c[1].endswith("/v1/song/generate")]) == runs_bef
 
 # 3f) review message + button callbacks
 vids = []
+btns = []
 class _TG2:
     admin_id = 1
     def send(self, *a, **k): sent.append(a)
     def send_audio(self, *a, **k): return True
+    def send_buttons(self, text, buttons, chat_id=None): btns.append((text, buttons))
     def send_video(self, path, caption="", buttons=None, chat_id=None):
         vids.append((path, buttons)); return True
     def answer_callback(self, *a, **k): pass
@@ -214,6 +218,26 @@ assert vids and [b[1] for b in vids[0][1]] == [f"post:{job_u}", f"redo:{job_u}",
 assert bot.latest_review() == job_u
 bot.do_post(job_u, 1)
 assert db.get(job_u)["status"] == "posted", db.get(job_u)["status"]
+
+# 3g) owner sends a poem -> bot asks for the language -> chosen language reaches Claude
+bot.wake = _th.Event()
+bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "text": "Qulab ketar ko'ksimga to'g'lar, darding olay"})
+pend = [r for r in db.recent(5) if r["status"] == "pending"]
+assert len(pend) == 1 and btns and any(b[1].startswith("lang:uz:") for b in btns[-1][1]), btns
+pid = pend[0]["id"]
+assert db.next_to_produce() is None or db.next_to_produce()["id"] != pid  # not produced before the choice
+bot.handle_callback({"id": "c1", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": f"lang:uz:{pid}"})
+assert db.get(pid)["status"] == "queued" and db.kv_get(f"lang:{pid}") == "uz" and bot.wake.is_set()
+bot.handle_callback({"id": "c2", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": f"lang:en:{pid}"})
+assert db.kv_get(f"lang:{pid}") == "uz"  # a second tap changes nothing
+pipe.produce(pid)
+prompt = last_claude["body"]["messages"][0]["content"]
+assert "UZBEK" in prompt and "lyrics in UZBEK" in prompt and "NOT in English" in prompt
+# English choice keeps the old behaviour
+from app import claude_api as _ca  # noqa: E402
+assert "ENGLISH song" in _ca.build_user_message("some poem text here", "", [], "en")
+assert "lyrics in ENGLISH" in _ca.build_user_message("some poem text here", "", [], "en")
+db.update(pid, status="failed")
 
 # 4) queue priority: user jobs first
 db.update(job3, status="queued")

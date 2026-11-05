@@ -63,11 +63,11 @@ class DB:
             self.conn.commit()
 
     # --- jobs ---------------------------------------------------------
-    def add_job(self, source: str, raw_text: str = "", theme: str = "") -> int:
+    def add_job(self, source: str, raw_text: str = "", theme: str = "", status: str = "queued") -> int:
         with self.lock:
             cur = self.conn.execute(
-                "INSERT INTO jobs (source, raw_text, theme, created_at) VALUES (?, ?, ?, ?)",
-                (source, raw_text, theme, time.time()),
+                "INSERT INTO jobs (source, raw_text, theme, status, created_at) VALUES (?, ?, ?, ?, ?)",
+                (source, raw_text, theme, status, time.time()),
             )
             self.conn.commit()
             return int(cur.lastrowid)

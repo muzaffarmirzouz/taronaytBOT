@@ -89,6 +89,7 @@ class Pipeline:
             pkg = claude_api.make_package(
                 self.cfg, raw_text=job["raw_text"], theme=job["theme"],
                 avoid_titles=self.db.recent_titles(25),
+                language=self.db.kv_get(f"lang:{job_id}", "en"),
             )
             self.db.update(
                 job_id, title=pkg["title"], lyrics=pkg["lyrics"], style=pkg["style"],
