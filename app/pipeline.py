@@ -111,6 +111,10 @@ class Pipeline:
                 images.generate(self.cfg, job["image_prompt"], image)
             except Exception as exc:
                 log.warning("job %s: image generation failed (%s); using fallback art", job_id, exc)
+                try:
+                    self.notify(f"⚠️ #{job_id}: rasm chizilmadi, oddiy fon qo'yildi.\nSabab: {str(exc)[:600]}")
+                except Exception:
+                    pass
                 video.fallback_image(image, seed=job_id)
             self.db.update(job_id, image_path=str(image))
             job = self.db.get(job_id)
