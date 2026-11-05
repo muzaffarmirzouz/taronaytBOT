@@ -13,8 +13,8 @@ class Telegram:
         self.base = f"https://api.telegram.org/bot{token}"
         self.admin_id = admin_id
 
-    def call(self, method: str, timeout: int = 30, retries: int = 3, **params) -> dict:
-        resp = net.request("POST", f"{self.base}/{method}", json=params, timeout=timeout, retries=retries)
+    def call(self, method: str, http_timeout: int = 30, retries: int = 3, **params) -> dict:
+        resp = net.request("POST", f"{self.base}/{method}", json=params, timeout=http_timeout, retries=retries)
         try:
             data = resp.json()
         except ValueError:
@@ -51,4 +51,4 @@ class Telegram:
         params = {"timeout": 50, "allowed_updates": ["message"]}
         if offset is not None:
             params["offset"] = offset
-        return self.call("getUpdates", timeout=65, retries=1, **params)
+        return self.call("getUpdates", http_timeout=65, retries=1, **params)

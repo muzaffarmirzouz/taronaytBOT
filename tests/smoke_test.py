@@ -83,6 +83,11 @@ def fake_request(method, url, **kw):
     if url == "https://upload.example/session1":
         assert hasattr(kw["data"], "read")
         return Resp(js={"id": "VID123"})
+    if "api.telegram.org" in url:
+        if url.endswith("/getUpdates"):
+            assert kw["json"]["timeout"] == 50 and kw["timeout"] == 65, kw
+            return Resp(js={"ok": True, "result": [{"update_id": 7}]})
+        return Resp(js={"ok": True, "result": {}})
     if "thumbnails/set" in url:
         return Resp(js={})
     raise AssertionError(f"unexpected request {method} {url}")
@@ -169,5 +174,11 @@ try:
     raise SystemExit("validation should fail")
 except ValueError:
     pass
+
+# 9) Telegram client: long-poll and audio upload
+from app.tg import Telegram  # noqa: E402
+tgc = Telegram("t", 1)
+assert tgc.updates(None) == [{"update_id": 7}]
+assert tgc.send_audio(SONG, title="x", caption="y") is True
 
 print("ALL SMOKE TESTS PASSED", "| tmp:", TMP)
