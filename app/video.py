@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import random
 import subprocess
 from pathlib import Path
@@ -40,18 +41,32 @@ def fallback_image(out_path: Path, seed: int = 0) -> Path:
     return out_path
 
 
-def make_video(image: Path, audio: Path, out_path: Path) -> Path:
-    """1920x1080 mp4: the picture drifts slowly left to right for the whole song."""
+def make_video(image: Path, audio: Path, out_path: Path, visualizer: bool | None = None) -> Path:
+    """1920x1080 mp4: the picture drifts slowly left to right, edges are darkened, and
+    (optionally) music-reactive bars dance along the bottom."""
+    if visualizer is None:
+        visualizer = os.environ.get("VIDEO_VISUALIZER", "0") == "1"  # opt-in via Railway variable
     duration = probe_duration(audio)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    vf = (
-        "scale=2112:1188:force_original_aspect_ratio=increase,crop=2112:1188,"
-        f"crop=1920:1080:x='(in_w-out_w)*t/{duration:.2f}':y='(in_h-out_h)/2',format=yuv420p"
+    bg = (
+        "[0:v]scale=2112:1188:force_original_aspect_ratio=increase,crop=2112:1188,"
+        f"crop=1920:1080:x='(in_w-out_w)*t/{duration:.2f}':y='(in_h-out_h)/2',"
+        "vignette=PI/5,format=yuv420p"
     )
+    if visualizer:
+        graph = (
+            bg + "[bg];"
+            "[1:a]showfreqs=s=1920x230:mode=bar:fscale=log:ascale=sqrt:win_size=2048:rate=24"
+            ":colors=white|0xffd9a0,format=rgba,colorkey=0x000000:0.12:0.08,"
+            "colorchannelmixer=aa=0.8[viz];"
+            "[bg][viz]overlay=0:H-h-30:format=auto,format=yuv420p[v]"
+        )
+    else:
+        graph = bg + "[v]"
     _run([
         "ffmpeg", "-y", "-loop", "1", "-framerate", "24", "-i", str(image), "-i", str(audio),
-        "-vf", vf,
+        "-filter_complex", graph, "-map", "[v]", "-map", "1:a",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
         "-c:a", "aac", "-b:a", "192k",
         "-t", f"{duration:.2f}", "-movflags", "+faststart", str(out_path),
