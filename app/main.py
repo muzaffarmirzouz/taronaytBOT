@@ -72,6 +72,8 @@ class Bot:
                 self.pipeline.produce(job["id"])
                 done = self.db.get(job["id"])
                 self.tg.send(f"✅ Tayyor #{job['id']}: {done['title']} (navbatda {self.db.count('ready')} ta video)")
+                self.tg.send_audio(done["mp3_path"], title=done["title"],
+                                   caption=f"#{job['id']} {done['yt_title'] or done['title']}\n{done['style'][:300]}")
             except BudgetExceeded as exc:
                 self.db.update(job["id"], status="queued")
                 key = "budget_notified:" + self.pipeline._budget_key()

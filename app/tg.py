@@ -33,6 +33,20 @@ class Telegram:
             except Exception as exc:
                 log.warning("sendMessage failed: %s", exc)
 
+    def send_audio(self, path, title: str = "", caption: str = "", chat_id: int | None = None) -> bool:
+        """Upload an audio file (<=50 MB). Never raises; returns False on failure."""
+        try:
+            with open(path, "rb") as fh:
+                resp = net.request(
+                    "POST", f"{self.base}/sendAudio", retries=1, timeout=180,
+                    data={"chat_id": chat_id or self.admin_id, "title": title[:64],
+                          "caption": caption[:1000]},
+                    files={"audio": fh})
+            return bool(resp.json().get("ok"))
+        except Exception as exc:
+            log.warning("sendAudio failed: %s", exc)
+            return False
+
     def updates(self, offset: int | None) -> list:
         params = {"timeout": 50, "allowed_updates": ["message"]}
         if offset is not None:
