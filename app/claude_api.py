@@ -23,8 +23,9 @@ SCHEMA_HELP = """Return a JSON object with exactly these keys:
   a memorable repeated hook in the chorus. Original wording only.
 - "style": music style prompt for the song generator, max 220 characters: genre, mood, tempo/BPM, vocal type
   (e.g. warm male vocal / airy female vocal), 3-4 instruments. NEVER mention real artists, bands or songs.
-- "image_prompt": a vivid prompt for a 3:2 landscape illustration matching the song's mood (one clear scene, a
-  consistent art style). It must contain no text, letters, logos or watermarks and no real people or celebrities.
+- "image_prompt": a vivid prompt for a 3:2 landscape illustration that visualises THIS song's theme and story: one clear
+  scene built from concrete places, objects, weather, light and mood named in the lyrics (not a generic backdrop). Vary
+  the art style from song to song (cinematic photo, watercolor, anime-style landscape, neon synthwave, oil painting...). It must contain no text, letters, logos or watermarks and no real people or celebrities.
 - "yt_title": YouTube title, max 90 characters. Format like "<Song Title> (Official Lyric Video) | <Genre/Mood> Song".
   Natural, appealing to US listeners, no clickbait lies.
 - "yt_description": 2-3 short paragraphs (what the song feels like, who it is for), then a line "Lyrics:" followed by

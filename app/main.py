@@ -26,6 +26,7 @@ Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot uni inglizcha qo'shiqqa aylanti
 /yarat [mavzu] — hoziroq yangi qo'shiq yaratish (mavzu ixtiyoriy)
 /joyla — keyingi tayyor videoni hoziroq YouTube'ga joylash
 /bekor <id> — navbatdagi qo'shiqni bekor qilish
+/rasm — tayyor videolarga yangi rasm chizib, videoni qayta yig'ish
 /toxtat — avtomatik ishlashni to'xtatish (yaratish va joylash)
 /davom — qayta yoqish"""
 
@@ -160,6 +161,23 @@ class Bot:
             for r in rows
         )
 
+    def redo_images(self, ids: list, chat_id: int) -> None:
+        """Draw a fresh cover for already-finished songs and rebuild their videos (the song is kept)."""
+        done = 0
+        for job_id in ids:
+            with self.produce_lock:
+                job = self.db.get(job_id)
+                if not job or job["status"] != "ready":
+                    continue
+                self.db.update(job_id, status="producing", image_path="", mp4_path="")
+                try:
+                    self.pipeline.produce(job_id)
+                    done += 1
+                except Exception as exc:
+                    log.exception("redo image failed for %s", job_id)
+                    self.db.update(job_id, status="queued", error=str(exc)[:300])
+        self.tg.send(f"🎨 Tayyor: {done}/{len(ids)} ta videoning rasmi yangilandi.", chat_id)
+
     def handle(self, msg: dict) -> None:
         chat_id = msg["chat"]["id"]
         if msg.get("from", {}).get("id") != self.cfg.admin_id:
@@ -195,6 +213,13 @@ class Bot:
                     self.tg.send(f"#{arg} bekor qilindi.", chat_id)
                 else:
                     self.tg.send("Foydalanish: /bekor <id> (faqat navbatdagi yoki tayyor qo'shiq).", chat_id)
+            elif cmd == "/rasm":
+                ids = [r["id"] for r in self.db.recent(200) if r["status"] == "ready"]
+                if not ids:
+                    self.tg.send("Tayyor video yo'q.", chat_id)
+                else:
+                    self.tg.send(f"🎨 {len(ids)} ta videoning rasmi qayta chizilmoqda. Tugagach xabar beraman.", chat_id)
+                    threading.Thread(target=self.redo_images, args=(ids, chat_id), daemon=True).start()
             elif cmd == "/toxtat":
                 self.db.kv_set("paused", "1")
                 self.tg.send("⏸ To'xtatildi. /davom bilan qayta yoqiladi.", chat_id)

@@ -164,6 +164,22 @@ assert images._working["model"] == "gpt-image-1.5" and (TMP / "x.png").exists()
 net.request = _orig
 images._working["model"] = ""
 
+# 3d) /rasm: rebuild a ready job's cover + video, keep the song
+job_r = db.add_job("auto", theme="x | y")
+db.update(job_r, status="ready", title="T", lyrics="[Verse]\nhi", style="s", image_prompt="a hill at dusk",
+          yt_title="T", yt_description="d", yt_tags="[]", mp3_path=str(SONG))
+from app.main import Bot  # noqa: E402
+bot = Bot.__new__(Bot)
+import threading as _th  # noqa: E402
+bot.db, bot.pipeline, bot.produce_lock = db, pipe, _th.Lock()
+class _TG:
+    def send(self, *a, **k): sent.append(a)
+bot.tg = _TG()
+before = pipe.mureka_used_today()
+bot.redo_images([job_r], 1)
+assert db.get(job_r)["status"] == "ready" and Path(db.get(job_r)["mp4_path"]).exists()
+assert pipe.mureka_used_today() == before  # no new paid song
+
 # 4) queue priority: user jobs first
 db.update(job3, status="queued")
 ujob = db.add_job("user", raw_text="x" * 30)
