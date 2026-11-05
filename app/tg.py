@@ -48,10 +48,12 @@ class Telegram:
             return False
 
     def send_buttons(self, text: str, buttons: list, chat_id: int | None = None) -> None:
-        """Message with one row of inline buttons [(label, callback_data), ...]."""
+        """Message with inline buttons: a list of (label, callback_data), or a list of such rows."""
+        rows = buttons if buttons and isinstance(buttons[0], list) else [buttons]
         try:
             self.call("sendMessage", chat_id=chat_id or self.admin_id, text=text,
-                      reply_markup={"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in buttons]]})
+                      reply_markup={"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row]
+                                                        for row in rows]})
         except Exception as exc:
             log.warning("sendMessage(buttons) failed: %s", exc)
 

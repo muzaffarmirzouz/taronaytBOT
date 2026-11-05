@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from . import scheduler
 from .config import Config
+from .claude_api import GENRES
 from .db import DB, STOCK_STATUSES
 from .pipeline import BudgetExceeded, Pipeline
 from .tg import Telegram
@@ -19,7 +20,7 @@ log = logging.getLogger("bot")
 
 HELP = """🎵 Kunlik qo'shiq boti
 
-Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot tilni so'raydi (🇺🇿 o'zbekcha yoki 🇬🇧 inglizcha), keyin navbatsiz darhol qo'shiq qiladi va videoni tasdiqlash uchun yuboradi.
+Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot tilni (🇺🇿 o'zbekcha / 🇬🇧 inglizcha) va janrni (klub, remix, afro, pop...) so'raydi, keyin navbatsiz darhol qo'shiq qiladi va videoni tasdiqlash uchun yuboradi.
 
 /holat — navbat, keyingi joylash vaqti, bugungi sarf
 /navbat — oxirgi 10 ta qo'shiq
@@ -141,6 +142,12 @@ class Bot:
             self.tg.send(f"Video yuborilmadi (hajmi katta bo'lishi mumkin).\n"
                          f"/joyla {job_id} — joylash · /boshqa {job_id} — boshqacha qilish · /bekor {job_id}")
 
+    def genre_rows(self, job_id: int) -> list:
+        items = [(label, f"gen:{key}:{job_id}") for key, (label, _) in GENRES.items()]
+        rows = [items[i:i + 2] for i in range(0, len(items), 2)]
+        rows.append([("❌ Bekor", f"del:{job_id}")])
+        return rows
+
     def latest_review(self) -> int | None:
         rows = [r for r in self.db.recent(50) if r["status"] == "review"]
         return rows[0]["id"] if rows else None
@@ -196,11 +203,21 @@ class Bot:
                 self.tg.answer_callback(cb["id"], "Bu allaqachon boshlangan yoki bekor qilingan.")
                 return
             self.db.kv_set(f"lang:{job['id']}", lang)
+            name = "o'zbekcha" if lang == "uz" else "inglizcha"
+            self.tg.answer_callback(cb["id"], f"Til: {name}")
+            self.tg.send_buttons(f"🎼 #{job['id']} ({name}). Qaysi janrda bo'lsin?", self.genre_rows(job["id"]), chat_id)
+            return
+        if data.startswith("gen:"):
+            _, key, raw_id = (data.split(":") + ["", ""])[:3]
+            job = self.db.get(int(raw_id)) if raw_id.isdigit() and key in GENRES else None
+            if not job or job["status"] != "pending":
+                self.tg.answer_callback(cb["id"], "Bu allaqachon boshlangan yoki bekor qilingan.")
+                return
+            self.db.kv_set(f"genre:{job['id']}", key)
             self.db.update(job["id"], status="queued")
             self.wake.set()
-            name = "o'zbekcha" if lang == "uz" else "inglizcha"
-            self.tg.answer_callback(cb["id"], f"Boshlandi: {name}")
-            self.tg.send(f"🎶 #{job['id']} {name} qo'shiqqa aylantirilyapti. Tayyor bo'lganda videoni yuboraman "
+            self.tg.answer_callback(cb["id"], "Boshlandi")
+            self.tg.send(f"🎶 #{job['id']} tayyorlanmoqda: {GENRES[key][0]}. Tayyor bo'lganda videoni yuboraman "
                          f"va joylash-joylamasligini so'rayman (2–5 daqiqa).", chat_id)
             return
         action, _, raw = data.partition(":")

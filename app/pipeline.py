@@ -90,6 +90,7 @@ class Pipeline:
                 self.cfg, raw_text=job["raw_text"], theme=job["theme"],
                 avoid_titles=self.db.recent_titles(25),
                 language=self.db.kv_get(f"lang:{job_id}", "en"),
+                genre=self.db.kv_get(f"genre:{job_id}", ""),
             )
             self.db.update(
                 job_id, title=pkg["title"], lyrics=pkg["lyrics"], style=pkg["style"],

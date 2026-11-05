@@ -226,13 +226,18 @@ pend = [r for r in db.recent(5) if r["status"] == "pending"]
 assert len(pend) == 1 and btns and any(b[1].startswith("lang:uz:") for b in btns[-1][1]), btns
 pid = pend[0]["id"]
 assert db.next_to_produce() is None or db.next_to_produce()["id"] != pid  # not produced before the choice
+btns.clear()
 bot.handle_callback({"id": "c1", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": f"lang:uz:{pid}"})
-assert db.get(pid)["status"] == "queued" and db.kv_get(f"lang:{pid}") == "uz" and bot.wake.is_set()
-bot.handle_callback({"id": "c2", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": f"lang:en:{pid}"})
-assert db.kv_get(f"lang:{pid}") == "uz"  # a second tap changes nothing
+assert db.get(pid)["status"] == "pending" and db.kv_get(f"lang:{pid}") == "uz"  # genre still to be chosen
+assert btns and any(b[1] == f"gen:club:{pid}" for row in btns[-1][1] for b in row), btns
+bot.handle_callback({"id": "c2", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": f"gen:club:{pid}"})
+assert db.get(pid)["status"] == "queued" and db.kv_get(f"genre:{pid}") == "club" and bot.wake.is_set()
+bot.handle_callback({"id": "c3", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": f"gen:trap:{pid}"})
+assert db.kv_get(f"genre:{pid}") == "club"  # a second tap changes nothing
 pipe.produce(pid)
 prompt = last_claude["body"]["messages"][0]["content"]
 assert "UZBEK" in prompt and "lyrics in UZBEK" in prompt and "NOT in English" in prompt
+assert "club dance track" in prompt and "GENRE requested" in prompt
 # English choice keeps the old behaviour
 from app import claude_api as _ca  # noqa: E402
 assert "ENGLISH song" in _ca.build_user_message("some poem text here", "", [], "en")

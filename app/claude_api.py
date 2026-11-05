@@ -63,6 +63,17 @@ def _validate(data: dict) -> dict:
     return data
 
 
+# key -> (button label, instruction for the music style)
+GENRES = {
+    "club": ("🎧 Klub / Dance", "club dance track, four-on-the-floor EDM beat, big catchy vocal hook, 124-128 BPM, euphoric and energetic"),
+    "remix": ("🔥 Remix / EDM", "party remix style, energetic EDM dance-pop with a big bass drop, punchy synths, 126 BPM"),
+    "afro": ("🌴 Afro House", "afro house / amapiano groove, warm percussion and log-drum bass, danceable and sunny, 118-124 BPM"),
+    "pop": ("🎉 Sho'x Pop", "upbeat playful pop, bright and cheerful, handclaps, catchy chorus, 110-120 BPM"),
+    "trap": ("🎤 Hip-Hop / Trap", "trap / hip-hop with deep 808 bass and hi-hats, sung-rap vocal hook, confident and bouncy, 135-145 BPM"),
+    "ballad": ("💞 Ballada", "emotional slow ballad, piano and strings, heartfelt vocal, 70-80 BPM"),
+    "any": ("🎲 Tasodifiy sho'x", "any upbeat, energetic and danceable genre you think fits this text best"),
+}
+
 UZBEK_BRIEF = (
     "The owner chose UZBEK as the song language. Write the song in UZBEK (Latin script, natural modern Uzbek), "
     "NOT in English. Keep the owner's own words, lines, imagery and story as much as possible: only lightly edit for "
@@ -76,7 +87,7 @@ UZBEK_BRIEF = (
 )
 
 
-def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: str = "en") -> str:
+def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: str = "en", genre: str = "") -> str:
     parts = []
     if raw_text.strip() and language == "uz":
         parts.append(
@@ -99,6 +110,12 @@ def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: 
         )
     if avoid_titles:
         parts.append("Do NOT reuse or closely echo these recent titles: " + "; ".join(avoid_titles[:25]))
+    if genre in GENRES and raw_text.strip():
+        parts.append(
+            f"GENRE requested by the owner: {GENRES[genre][1]}. The \"style\" field must clearly describe this genre "
+            "and the lyrics must fit its energy. (If the owner's text contains a line starting with 'Janr:' or "
+            "'Uslub:', that line has priority over this genre.)"
+        )
     schema = SCHEMA_HELP
     if language == "uz":
         schema = schema.replace("full song lyrics in ENGLISH", "full song lyrics in UZBEK (Latin script)")
@@ -107,7 +124,7 @@ def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: 
 
 
 def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | None = None,
-                 language: str = "en") -> dict:
+                 language: str = "en", genre: str = "") -> dict:
     headers = {
         "x-api-key": cfg.anthropic_key,
         "anthropic-version": "2023-06-01",
@@ -117,7 +134,7 @@ def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | 
         "model": cfg.claude_model,
         "max_tokens": 4000,
         "system": SYSTEM,
-        "messages": [{"role": "user", "content": build_user_message(raw_text, theme, avoid_titles or [], language)}],
+        "messages": [{"role": "user", "content": build_user_message(raw_text, theme, avoid_titles or [], language, genre)}],
     }
     last_err = None
     for attempt in range(3):
