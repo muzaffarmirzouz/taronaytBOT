@@ -24,8 +24,9 @@ Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot uni inglizcha qo'shiqqa aylanti
 /holat — navbat, keyingi joylash vaqti, bugungi sarf
 /navbat — oxirgi 10 ta qo'shiq
 /yarat [mavzu] — hoziroq yangi qo'shiq yaratish (mavzu ixtiyoriy)
-/joyla — keyingi tayyor videoni hoziroq YouTube'ga joylash
-/bekor <id> — navbatdagi qo'shiqni bekor qilish
+/joyla [id] — tasdiqlanayotgan (yoki keyingi tayyor) videoni YouTube'ga joylash
+/boshqa [id] — videoni boshqacha qilish (yangi rasm va uslub, qo'shiq o'sha)
+/bekor <id> — qo'shiqni bekor qilish
 /rasm — tayyor videolarga yangi rasm chizib, videoni qayta yig'ish
 /toxtat — avtomatik ishlashni to'xtatish (yaratish va joylash)
 /davom — qayta yoqish"""
@@ -39,6 +40,7 @@ class Bot:
         self.pipeline = Pipeline(cfg, self.db, self.tg.send)
         self.tz = ZoneInfo(cfg.timezone)
         self.produce_lock = threading.Lock()
+        self.wake = threading.Event()  # set when the owner sends a poem, so work starts at once
         self.publish_lock = threading.Lock()
         self.stop = threading.Event()
         scheduler.parse_times(cfg.post_times)  # fail fast on bad POST_TIMES
@@ -56,7 +58,8 @@ class Bot:
                 self.produce_next()
             except Exception:
                 log.exception("worker loop error")
-            self.stop.wait(15)
+            self.wake.wait(15)
+            self.wake.clear()
 
     def fill_stock(self) -> None:
         stock = self.db.count(*STOCK_STATUSES)
@@ -74,9 +77,12 @@ class Bot:
             try:
                 self.pipeline.produce(job["id"])
                 done = self.db.get(job["id"])
-                self.tg.send(f"✅ Tayyor #{job['id']}: {done['title']} (navbatda {self.db.count('ready')} ta video)")
-                self.tg.send_audio(done["mp3_path"], title=done["title"],
-                                   caption=f"#{job['id']} {done['yt_title'] or done['title']}\n{done['style'][:300]}")
+                if done["status"] == "review":
+                    self.send_review(job["id"])
+                else:
+                    self.tg.send(f"✅ Tayyor #{job['id']}: {done['title']} (navbatda {self.db.count('ready')} ta video)")
+                    self.tg.send_audio(done["mp3_path"], title=done["title"],
+                                       caption=f"#{job['id']} {done['yt_title'] or done['title']}\n{done['style'][:300]}")
             except BudgetExceeded as exc:
                 self.db.update(job["id"], status="queued")
                 key = "budget_notified:" + self.pipeline._budget_key()
@@ -122,6 +128,77 @@ class Bot:
             done.add(key)
             self.db.kv_set("done_slots", json.dumps(sorted(done)[-30:]))
 
+    # --- owner review: video + [Post] [Another version] [Cancel] --------
+    def send_review(self, job_id: int) -> None:
+        job = self.db.get(job_id)
+        caption = (f"🎬 #{job_id} {job['title']}\n{job['yt_title']}\n\n"
+                   f"Yoqdimi? YouTube'ga joylaymi?")
+        buttons = [("✅ Joylash", f"post:{job_id}"), ("🔄 Boshqa qil", f"redo:{job_id}"),
+                   ("❌ Bekor", f"del:{job_id}")]
+        if not self.tg.send_video(job["mp4_path"], caption, buttons):
+            # video too big / upload failed: fall back to audio + text commands
+            self.tg.send_audio(job["mp3_path"], title=job["title"], caption=caption)
+            self.tg.send(f"Video yuborilmadi (hajmi katta bo'lishi mumkin).\n"
+                         f"/joyla {job_id} — joylash · /boshqa {job_id} — boshqacha qilish · /bekor {job_id}")
+
+    def latest_review(self) -> int | None:
+        rows = [r for r in self.db.recent(50) if r["status"] == "review"]
+        return rows[0]["id"] if rows else None
+
+    def do_post(self, job_id: int, chat_id: int) -> None:
+        job = self.db.get(job_id)
+        if not job:
+            self.tg.send(f"#{job_id} topilmadi.", chat_id)
+        elif job["status"] == "posted":
+            self.tg.send(f"#{job_id} allaqachon joylangan: https://youtu.be/{job['youtube_id']}", chat_id)
+        elif job["status"] not in ("review", "ready"):
+            self.tg.send(f"#{job_id} hozir joylab bo'lmaydi (holati: {job['status']}).", chat_id)
+        else:
+            self.tg.send(f"📤 Joylanmoqda: #{job_id} {job['title']}", chat_id)
+            if not self.post_job(job_id):
+                self.tg.send("Boshqa joylash davom etyapti, birozdan keyin qayta urining.", chat_id)
+
+    def do_redo(self, job_id: int, chat_id: int) -> None:
+        job = self.db.get(job_id)
+        if not job or job["status"] not in ("review", "ready"):
+            self.tg.send(f"#{job_id} ni boshqacha qilib bo'lmaydi.", chat_id)
+            return
+        back = job["status"]
+        self.tg.send(f"🔄 #{job_id}: yangi rasm va uslub bilan qayta yig'ilmoqda (1–3 daqiqa)...", chat_id)
+        with self.produce_lock:
+            try:
+                self.pipeline.new_look(job_id)
+            except Exception as exc:
+                log.exception("redo failed")
+                self.db.update(job_id, status=back)
+                self.tg.send(f"⚠️ Qayta yig'ishda xatolik: {str(exc)[:300]}", chat_id)
+                return
+        self.send_review(job_id)
+
+    def do_cancel(self, job_id: int, chat_id: int) -> None:
+        job = self.db.get(job_id)
+        if job and job["status"] in ("queued", "ready", "review"):
+            self.db.update(job_id, status="failed", error="bekor qilindi")
+            self.tg.send(f"#{job_id} bekor qilindi.", chat_id)
+        else:
+            self.tg.send("Foydalanish: /bekor <id> (faqat navbatdagi, tayyor yoki tasdiq kutayotgan qo'shiq).", chat_id)
+
+    def handle_callback(self, cb: dict) -> None:
+        chat_id = cb["message"]["chat"]["id"]
+        if cb.get("from", {}).get("id") != self.cfg.admin_id:
+            self.tg.answer_callback(cb["id"], "Bu bot yopiq.")
+            return
+        action, _, raw = (cb.get("data") or "").partition(":")
+        if not raw.isdigit():
+            self.tg.answer_callback(cb["id"])
+            return
+        job_id = int(raw)
+        self.tg.answer_callback(cb["id"], {"post": "Joylanmoqda...", "redo": "Qayta yig'ilmoqda...",
+                                           "del": "Bekor qilindi"}.get(action, ""))
+        target = {"post": self.do_post, "redo": self.do_redo, "del": self.do_cancel}.get(action)
+        if target:
+            threading.Thread(target=target, args=(job_id, chat_id), daemon=True).start()
+
     def post_job(self, job_id: int) -> bool:
         if not self.publish_lock.acquire(blocking=False):
             return False
@@ -144,6 +221,7 @@ class Bot:
         return (
             f"📊 Holat {'(⏸ to‘xtatilgan)' if self.paused() else '(▶️ ishlayapti)'}\n"
             f"Tayyor video: {db.count('ready')}\n"
+            f"Tasdiq kutayotgan (sizniki): {db.count('review')}\n"
             f"Tayyorlanmoqda/navbatda: {db.count('queued', 'producing')}\n"
             f"Joylangan: {db.count('posted')} · Xato: {db.count('failed')}\n"
             f"Keyingi joylash: {nxt.strftime('%Y-%m-%d %H:%M')} ({self.cfg.timezone})\n"
@@ -201,18 +279,22 @@ class Bot:
                 job_id = self.pipeline.add_auto_job(arg and f"{arg} | {arg}")
                 self.tg.send(f"Navbatga qo'shildi #{job_id}. Tayyor bo'lganda xabar beraman.", chat_id)
             elif cmd == "/joyla":
-                job = self.db.next_ready()
-                if not job:
+                target = int(arg) if arg.isdigit() else (self.latest_review() or (self.db.next_ready() or {}).get("id"))
+                if not target:
                     self.tg.send("Tayyor video yo'q.", chat_id)
                 else:
-                    self.tg.send(f"Joylanmoqda: #{job['id']} {job['title']}", chat_id)
-                    threading.Thread(target=self.post_job, args=(job["id"],), daemon=True).start()
-            elif cmd == "/bekor":
-                if arg.isdigit() and self.db.get(int(arg)) and self.db.get(int(arg))["status"] in ("queued", "ready"):
-                    self.db.update(int(arg), status="failed", error="bekor qilindi")
-                    self.tg.send(f"#{arg} bekor qilindi.", chat_id)
+                    threading.Thread(target=self.do_post, args=(target, chat_id), daemon=True).start()
+            elif cmd == "/boshqa":
+                target = int(arg) if arg.isdigit() else self.latest_review()
+                if not target:
+                    self.tg.send("Tasdiq kutayotgan video yo'q. Foydalanish: /boshqa <id>", chat_id)
                 else:
-                    self.tg.send("Foydalanish: /bekor <id> (faqat navbatdagi yoki tayyor qo'shiq).", chat_id)
+                    threading.Thread(target=self.do_redo, args=(target, chat_id), daemon=True).start()
+            elif cmd == "/bekor":
+                if arg.isdigit():
+                    self.do_cancel(int(arg), chat_id)
+                else:
+                    self.tg.send("Foydalanish: /bekor <id>", chat_id)
             elif cmd == "/rasm":
                 ids = [r["id"] for r in self.db.recent(200) if r["status"] == "ready"]
                 if not ids:
@@ -233,9 +315,10 @@ class Bot:
             self.tg.send("Matn juda qisqa. Sher yoki qo'shiq so'zlarini to'liq yuboring (kamida 20 belgi).", chat_id)
             return
         job_id = self.pipeline.db.add_job("user", raw_text=text)
+        self.wake.set()
         self.tg.send(
-            f"🎤 Qabul qilindi #{job_id}. Inglizcha qo'shiqqa aylantirib, navbatning boshiga qo'yaman. "
-            f"Tayyor bo'lganda xabar beraman.", chat_id)
+            f"🎤 Qabul qilindi #{job_id}. Inglizcha qo'shiqqa aylantiryapman, navbatsiz darhol ishlayman. "
+            f"Tayyor bo'lganda videoni yuboraman va joylash-joylamasligini so'rayman (2–5 daqiqa).", chat_id)
 
     def poll_loop(self) -> None:
         offset = None
@@ -243,11 +326,13 @@ class Bot:
             try:
                 for upd in self.tg.updates(offset):
                     offset = upd["update_id"] + 1
-                    if "message" in upd:
-                        try:
+                    try:
+                        if "message" in upd:
                             self.handle(upd["message"])
-                        except Exception:
-                            log.exception("handler error")
+                        elif "callback_query" in upd:
+                            self.handle_callback(upd["callback_query"])
+                    except Exception:
+                        log.exception("handler error")
             except Exception:
                 log.exception("polling error")
                 self.stop.wait(5)

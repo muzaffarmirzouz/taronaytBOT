@@ -47,8 +47,29 @@ class Telegram:
             log.warning("sendAudio failed: %s", exc)
             return False
 
+    def send_video(self, path, caption: str = "", buttons: list | None = None, chat_id: int | None = None) -> bool:
+        """Upload a video (<=50 MB) with optional inline buttons [(text, callback_data), ...]. Never raises."""
+        import json as _json
+        try:
+            data = {"chat_id": chat_id or self.admin_id, "caption": caption[:1000], "supports_streaming": "true"}
+            if buttons:
+                data["reply_markup"] = _json.dumps({"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in buttons]]})
+            with open(path, "rb") as fh:
+                resp = net.request("POST", f"{self.base}/sendVideo", retries=1, timeout=300,
+                                   data=data, files={"video": fh})
+            return bool(resp.json().get("ok"))
+        except Exception as exc:
+            log.warning("sendVideo failed: %s", exc)
+            return False
+
+    def answer_callback(self, callback_id: str, text: str = "") -> None:
+        try:
+            self.call("answerCallbackQuery", callback_query_id=callback_id, text=text[:180])
+        except Exception as exc:
+            log.warning("answerCallbackQuery failed: %s", exc)
+
     def updates(self, offset: int | None) -> list:
-        params = {"timeout": 50, "allowed_updates": ["message"]}
+        params = {"timeout": 50, "allowed_updates": ["message", "callback_query"]}
         if offset is not None:
             params["offset"] = offset
         return self.call("getUpdates", http_timeout=65, retries=1, **params)

@@ -112,7 +112,7 @@ pipe = Pipeline(cfg, db, sent.append)
 job_id = db.add_job("user", raw_text="Qulab ketar ko'ksimga to'g'lar, senga tikan kirar bo'lsa ham...")
 pipe.produce(job_id)
 job = db.get(job_id)
-assert job["status"] == "ready", job
+assert job["status"] == "review", job  # the owner's own song waits for a yes/no
 assert job["title"] == "Take Your Pain" and Path(job["mp3_path"]).exists()
 
 out = subprocess.run(
@@ -146,7 +146,7 @@ except Exception as exc:
 # 3b) the owner's own song may exceed the automatic cap
 job_u = db.add_job("user", raw_text="y" * 30)
 pipe.produce(job_u)
-assert db.get(job_u)["status"] == "ready"
+assert db.get(job_u)["status"] == "review"
 
 # 3c) image model fallback: first model "does not exist" -> next one works
 from app import images  # noqa: E402
@@ -179,6 +179,41 @@ before = pipe.mureka_used_today()
 bot.redo_images([job_r], 1)
 assert db.get(job_r)["status"] == "ready" and Path(db.get(job_r)["mp4_path"]).exists()
 assert pipe.mureka_used_today() == before  # no new paid song
+
+# 3e) every visual style renders a valid 1080p video; "another version" keeps the song, changes style/cover
+from app import video  # noqa: E402
+for st in video.STYLES + ("plain",):
+    out = TMP / f"style_{st}.mp4"
+    video.make_video(PNG, SONG, out, style=st)
+    pr = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                         "-of", "csv=p=0", str(out)], capture_output=True, text=True, check=True)
+    assert pr.stdout.strip() == "1920,1080", (st, pr.stdout)
+assert all(video.pick_style() in video.STYLES for _ in range(20))
+assert video.pick_style(exclude="bars") != "bars"
+old_mp3 = db.get(job_u)["mp3_path"]
+runs_before = len([c for c in calls if c[1].endswith("/v1/song/generate")])
+pipe.new_look(job_u)
+j = db.get(job_u)
+assert j["status"] == "review" and j["mp3_path"] == old_mp3 and "[variation 1" in j["image_prompt"], j
+assert len([c for c in calls if c[1].endswith("/v1/song/generate")]) == runs_before  # no new paid song
+
+# 3f) review message + button callbacks
+vids = []
+class _TG2:
+    admin_id = 1
+    def send(self, *a, **k): sent.append(a)
+    def send_audio(self, *a, **k): return True
+    def send_video(self, path, caption="", buttons=None, chat_id=None):
+        vids.append((path, buttons)); return True
+    def answer_callback(self, *a, **k): pass
+bot.tg = _TG2()
+bot.cfg = cfg
+bot.publish_lock = _th.Lock()
+bot.send_review(job_u)
+assert vids and [b[1] for b in vids[0][1]] == [f"post:{job_u}", f"redo:{job_u}", f"del:{job_u}"]
+assert bot.latest_review() == job_u
+bot.do_post(job_u, 1)
+assert db.get(job_u)["status"] == "posted", db.get(job_u)["status"]
 
 # 4) queue priority: user jobs first
 db.update(job3, status="queued")

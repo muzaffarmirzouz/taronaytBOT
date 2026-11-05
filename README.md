@@ -48,6 +48,9 @@ Faqat `requests` kutubxonasi kerak. ffmpeg Dockerfile ichida o'rnatiladi.
 - `/yarat [mavzu]` — hoziroq yangi qo'shiq
 - `/joyla` — tayyor videoni hoziroq joylash
 - `/bekor <id>` — qo'shiqni bekor qilish
+- `/joyla [id]` — tasdiqlanayotgan videoni YouTube'ga joylash; `/boshqa [id]` — yangi rasm va uslub bilan qayta yig'ish; `/rasm` — tayyor videolarga yangi rasm
+- Sherni o'zingiz yuborsangiz, bot navbatsiz ishlaydi, videoni Telegram'ga yuboradi va tugmalar bilan so'raydi: ✅ Joylash / 🔄 Boshqa qil / ❌ Bekor. Tasdiqlamaguncha YouTube'ga chiqmaydi.
+- `VIDEO_STYLE` — `random` (standart), `pulse`, `bars`, `wave` yoki `plain`
 - `/toxtat`, `/davom` — avtomatikani to'xtatish/yoqish
 
 Sozlamalar (Railway Variables): `POST_TIMES=08:00,13:00,19:00` (soni = kuniga nechta), `TIMEZONE=America/New_York`, `STOCK_TARGET` (zaxirada nechta tayyor video), `MAX_MUREKA_PER_DAY=12` (kunlik pul sarfi chegarasi), `YT_PRIVACY` (public/unlisted/private).

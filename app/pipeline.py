@@ -80,7 +80,7 @@ class Pipeline:
         return self.db.add_job("auto", theme=theme or self.pick_idea())
 
     # --- produce --------------------------------------------------------
-    def produce(self, job_id: int) -> None:
+    def produce(self, job_id: int, style: str | None = None) -> None:
         job = self.db.get(job_id)
         self.db.update(job_id, status="producing", error="")
         folder = self.job_dir(job_id)
@@ -123,11 +123,27 @@ class Pipeline:
 
         mp4 = folder / "video.mp4"
         if not (job["mp4_path"] and Path(job["mp4_path"]).exists()):
-            video.make_video(Path(job["image_path"]), Path(job["mp3_path"]), mp4)
+            prev = self.db.kv_get(f"style:{job_id}", "")
+            style = style or video.pick_style(exclude=prev)
+            video.make_video(Path(job["image_path"]), Path(job["mp3_path"]), mp4, style=style)
+            self.db.kv_set(f"style:{job_id}", style)
             self.db.update(job_id, mp4_path=str(mp4))
 
-        self.db.update(job_id, status="ready")
-        log.info("job %s ready: %s", job_id, job["title"])
+        # The owner's own songs wait for a yes/no before they can be posted; automatic ones go straight to stock.
+        self.db.update(job_id, status="review" if job["source"] == "user" else "ready")
+        log.info("job %s finished: %s", job_id, job["title"])
+
+    def new_look(self, job_id: int) -> None:
+        """Owner asked for "another version": fresh cover and a different visual style, same song."""
+        job = self.db.get(job_id)
+        base = (job["image_prompt"] or "").split(" [variation")[0]
+        n = int(self.db.kv_get(f"variation:{job_id}", "0")) + 1
+        self.db.kv_set(f"variation:{job_id}", str(n))
+        self.db.update(
+            job_id, status="producing", image_path="", mp4_path="",
+            image_prompt=f"{base} [variation {n}: a different composition, time of day and art style]",
+        )
+        self.produce(job_id)
 
     # --- publish --------------------------------------------------------
     def build_description(self, job: dict, tags: list) -> str:
