@@ -45,13 +45,49 @@ STYLES = ("pulse", "bars", "wave")
 FPS = 24
 
 
-def pick_style(exclude: str | None = None) -> str:
+def pick_style(exclude: str | None = None, allowed: tuple = STYLES) -> str:
     """Random look for each video. VIDEO_STYLE=pulse|bars|wave|plain pins one look; default is random."""
     forced = os.environ.get("VIDEO_STYLE", "random").strip().lower()
-    if forced in STYLES or forced == "plain":
+    if forced in allowed or (forced == "plain" and allowed == STYLES):
         return forced
-    options = [x for x in STYLES if x != exclude] or list(STYLES)
+    options = [x for x in allowed if x != exclude] or list(allowed)
     return random.choice(options)
+
+
+FONT_CANDIDATES = (
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+)
+
+
+def _font() -> str | None:
+    return next((f for f in FONT_CANDIDATES if os.path.exists(f)), None)
+
+
+def frame_from(video_path: Path, out_path: Path) -> Path:
+    """Grab one frame of a background clip (used for the YouTube thumbnail)."""
+    _run(["ffmpeg", "-y", "-ss", "1", "-i", str(video_path), "-frames:v", "1", str(out_path)], timeout=120)
+    return out_path
+
+
+def make_loop(src: Path, out_path: Path, max_seconds: int = 30) -> Path:
+    """Normalise an owner's clip to 1080p/24fps and blend its end into its start so that,
+    played on repeat, there is no visible jump."""
+    d = min(probe_duration(src), float(max_seconds))
+    if d < 2:
+        raise ValueError("Video juda qisqa (kamida 2 soniya bo'lsin)")
+    f = min(1.0, d / 4)
+    graph = (
+        "[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=24,format=yuv420p,"
+        f"trim=duration={d:.3f},setpts=PTS-STARTPTS,split[a][b];"
+        f"[a]trim=start={f:.3f},setpts=PTS-STARTPTS[tail];[b]trim=end={f:.3f},setpts=PTS-STARTPTS[head];"
+        f"[tail][head]xfade=transition=fade:duration={f:.3f}:offset={d - 2 * f:.3f},format=yuv420p[v]"
+    )
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    _run(["ffmpeg", "-y", "-i", str(src), "-filter_complex", graph, "-map", "[v]", "-an",
+          "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-movflags", "+faststart", str(out_path)])
+    return out_path
 
 
 def beat_times(audio: Path) -> list:
@@ -91,26 +127,48 @@ def _zoom_expr(beats: list, frames: int) -> str:
     return f"st(0,in/{FPS});1.0+0.05*ld(0)/{max(frames / FPS, 1):.1f}{pulse}"
 
 
-def make_video(image: Path, audio: Path, out_path: Path, style: str | None = None) -> Path:
-    """1920x1080 mp4. The picture "breathes" with the bass; style adds an optional music visual:
-    pulse = nothing else, bars = mirrored glowing bars, wave = thin glowing waveform, plain = old slow pan."""
-    style = style or pick_style()
+def _title_filter(title: str, tmp: Path) -> str:
+    """drawtext filter that writes the song name in the top-left corner (empty if no font/title)."""
+    font = _font()
+    if not title.strip() or not font:
+        return ""
+    tf = tmp / "title.txt"
+    tf.write_text("\u266a  " + title.strip()[:60], encoding="utf-8")
+    return (f"drawtext=fontfile={font}:textfile={tf}:expansion=none:fontsize=58:fontcolor=white"
+            ":shadowcolor=black@0.7:shadowx=3:shadowy=3:x=64:y=54:alpha='min(t/1.5,1)'")
+
+
+def make_video(image: Path, audio: Path, out_path: Path, style: str | None = None,
+               bg_video: Path | None = None, title: str = "") -> Path:
+    """1920x1080 mp4.
+    With bg_video: the owner's clip loops until the song ends, the song title is written on it and a
+    music visualizer (bars or wave) runs along the bottom.
+    Without: the cover picture "breathes" with the bass (pulse) and may get bars/wave on top."""
+    import tempfile
     duration = probe_duration(audio)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     frames = int(duration * FPS) + 1
-    if style == "plain":
-        graph = (
-            "[0:v]scale=2112:1188:force_original_aspect_ratio=increase,crop=2112:1188,"
-            f"crop=1920:1080:x='(in_w-out_w)*t/{duration:.2f}':y='(in_h-out_h)/2',format=yuv420p[v]"
-        )
-    else:
-        zoom = _zoom_expr(beat_times(audio), frames)
-        bg = (
-            "[0:v]scale=2112:1188:force_original_aspect_ratio=increase,crop=2112:1188,setpts=N/24/TB,"
-            f"zoompan=z='{zoom}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080:fps={FPS},"
-            "vignette=PI/5,format=yuv420p"
-        )
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        titlef = _title_filter(title, tmp) if bg_video else ""
+        if bg_video:
+            style = style if style in ("bars", "wave") else "none"
+            inputs = ["-stream_loop", "-1", "-i", str(bg_video), "-i", str(audio)]
+            bg = ("[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=24,"
+                  "vignette=PI/5,format=yuv420p" + ("," + titlef if titlef else ""))
+        else:
+            style = style or pick_style()
+            inputs = ["-loop", "1", "-framerate", str(FPS), "-t", f"{duration:.2f}", "-i", str(image),
+                      "-i", str(audio)]
+            if style == "plain":
+                bg = ("[0:v]scale=2112:1188:force_original_aspect_ratio=increase,crop=2112:1188,"
+                      f"crop=1920:1080:x='(in_w-out_w)*t/{duration:.2f}':y='(in_h-out_h)/2',format=yuv420p")
+            else:
+                zoom = _zoom_expr(beat_times(audio), frames)
+                bg = ("[0:v]scale=2112:1188:force_original_aspect_ratio=increase,crop=2112:1188,setpts=N/24/TB,"
+                      f"zoompan=z='{zoom}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080:fps={FPS},"
+                      "vignette=PI/5,format=yuv420p")
         if style == "bars":
             graph = (
                 bg + "[bg];"
@@ -128,21 +186,39 @@ def make_video(image: Path, audio: Path, out_path: Path, style: str | None = Non
                 "[w1][g]overlay=format=auto[viz];"
                 "[bg][viz]overlay=(W-w)/2:H-h-120:format=auto,format=yuv420p[v]"
             )
-        else:  # pulse
+        else:  # pulse / plain / none: no overlay
             graph = bg + "[v]"
-    _run([
-        "ffmpeg", "-y", "-loop", "1", "-framerate", str(FPS), "-t", f"{duration:.2f}", "-i", str(image),
-        "-i", str(audio), "-filter_complex", graph, "-map", "[v]", "-map", "1:a",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
-        "-c:a", "aac", "-b:a", "192k",
-        "-t", f"{duration:.2f}", "-movflags", "+faststart", str(out_path),
-    ])
+        cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", graph, "-map", "[v]", "-map", "1:a",
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-c:a", "aac", "-b:a", "192k",
+               "-t", f"{duration:.2f}", "-movflags", "+faststart", str(out_path)]
+        try:
+            _run(cmd)
+        except RuntimeError:
+            if not titlef:
+                raise
+            log.warning("title overlay failed; rendering without the title")
+            return make_video(image, audio, out_path, style=style, bg_video=bg_video, title="")
     return out_path
 
 
-def make_thumbnail(image: Path, out_path: Path) -> Path:
+def make_thumbnail(image: Path, out_path: Path, title: str = "") -> Path:
+    import tempfile
+    import textwrap
     out_path = Path(out_path)
-    _run(["ffmpeg", "-y", "-i", str(image),
-          "-vf", "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720",
-          "-frames:v", "1", "-q:v", "3", str(out_path)], timeout=120)
+    base = "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720"
+    font = _font()
+    if title.strip() and font:
+        with tempfile.TemporaryDirectory() as tmp:
+            tf = Path(tmp) / "t.txt"
+            tf.write_text(textwrap.fill(title.strip()[:60], 20), encoding="utf-8")
+            vf = (base + f",drawtext=fontfile={font}:textfile={tf}:expansion=none:fontsize=88:fontcolor=white"
+                  ":box=1:boxcolor=black@0.35:boxborderw=22:shadowcolor=black@0.8:shadowx=4:shadowy=4"
+                  ":x=70:y=h-text_h-90")
+            try:
+                _run(["ffmpeg", "-y", "-i", str(image), "-vf", vf, "-frames:v", "1", "-q:v", "3", str(out_path)],
+                     timeout=120)
+                return out_path
+            except RuntimeError:
+                log.warning("thumbnail title failed; making a plain thumbnail")
+    _run(["ffmpeg", "-y", "-i", str(image), "-vf", base, "-frames:v", "1", "-q:v", "3", str(out_path)], timeout=120)
     return out_path

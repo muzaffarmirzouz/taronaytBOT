@@ -11,6 +11,7 @@ log = logging.getLogger("telegram")
 class Telegram:
     def __init__(self, token: str, admin_id: int):
         self.base = f"https://api.telegram.org/bot{token}"
+        self.file_base = f"https://api.telegram.org/file/bot{token}"
         self.admin_id = admin_id
 
     def call(self, method: str, http_timeout: int = 30, retries: int = 3, **params) -> dict:
@@ -46,6 +47,15 @@ class Telegram:
         except Exception as exc:
             log.warning("sendAudio failed: %s", exc)
             return False
+
+    def download_file(self, file_id: str, dest) -> None:
+        """Download a file the owner sent (Telegram bots can fetch up to 20 MB)."""
+        info = self.call("getFile", file_id=file_id)
+        resp = net.request("GET", f"{self.file_base}/{info['file_path']}", timeout=300)
+        if resp.status_code != 200:
+            raise RuntimeError(f"download failed: {resp.status_code}")
+        with open(dest, "wb") as fh:
+            fh.write(resp.content)
 
     def send_buttons(self, text: str, buttons: list, chat_id: int | None = None) -> None:
         """Message with inline buttons: a list of (label, callback_data), or a list of such rows."""

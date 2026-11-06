@@ -207,6 +207,9 @@ class _TG2:
     def send(self, *a, **k): sent.append(a)
     def send_audio(self, *a, **k): return True
     def send_buttons(self, text, buttons, chat_id=None): btns.append((text, buttons))
+    def download_file(self, file_id, dest):
+        import shutil
+        shutil.copy(CLIP, dest)
     def send_video(self, path, caption="", buttons=None, chat_id=None):
         vids.append((path, buttons)); return True
     def answer_callback(self, *a, **k): pass
@@ -243,6 +246,50 @@ from app import claude_api as _ca  # noqa: E402
 assert "ENGLISH song" in _ca.build_user_message("some poem text here", "", [], "en")
 assert "lyrics in ENGLISH" in _ca.build_user_message("some poem text here", "", [], "en")
 db.update(pid, status="failed")
+
+# 3h) owner's looping background clips
+from app import backgrounds  # noqa: E402
+CLIP = TMP / "clip.mp4"
+sh("ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc2=s=1280x720:r=30:d=10", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(CLIP))
+LONG = TMP / "long.mp3"
+sh("ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=330:duration=25", "-c:a", "libmp3lame", str(LONG))
+assert backgrounds.pick(cfg) is None  # empty library -> normal AI cover
+bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "video": {"file_id": "f1", "file_size": 3_000_000}})
+for _ in range(100):
+    if backgrounds.list_all(cfg):
+        break
+    import time as _t; _t.sleep(0.2)
+assert len(backgrounds.list_all(cfg)) == 1, backgrounds.list_all(cfg)
+bid, secs = backgrounds.add(cfg, CLIP)
+assert bid == 2 and 8.5 < secs < 9.5, (bid, secs)  # 10 s clip -> 9 s seamless loop
+bot.add_background({"file_id": "big", "file_size": 30_000_000}, 1)  # too big: refused politely
+assert len(backgrounds.list_all(cfg)) == 2
+assert backgrounds.pick(cfg, exclude=1)[0] == 2
+
+job_bg = db.add_job("user", raw_text="z" * 30)
+db.update(job_bg, lyrics="[Verse]\nhi", title="Samarkand Smile", style="s", yt_title="T", yt_description="d",
+          yt_tags=json.dumps(["pop", "love song", "new song 2026", "lyric video", "feel good"]), mp3_path=str(LONG))
+openai_before = len([c for c in calls if "api.openai.com" in c[1]])
+pipe.produce(job_bg)
+jb = db.get(job_bg)
+assert jb["status"] == "review" and db.kv_get(f"bg:{job_bg}") in ("1", "2")
+assert len([c for c in calls if "api.openai.com" in c[1]]) == openai_before  # no paid image
+assert db.kv_get(f"style:{job_bg}") in ("bars", "wave")
+dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
+                            "default=nw=1:nk=1", jb["mp4_path"]], capture_output=True, text=True, check=True).stdout)
+assert 24 < dur < 26, dur  # 9 s clip repeated until the 25 s song ends
+first_bg = db.kv_get(f"bg:{job_bg}")
+pipe.new_look(job_bg)
+assert db.get(job_bg)["status"] == "review" and db.kv_get(f"bg:{job_bg}") != first_bg  # another clip next time
+pipe.publish(job_bg)  # thumbnail with the title is rendered inside publish
+assert (pipe.job_dir(job_bg) / "thumb.jpg").exists()
+db.kv_set("bg_mode", "rasm")
+job_img = db.add_job("user", raw_text="q" * 30)
+db.update(job_img, lyrics="[Verse]\nhi", title="T2", style="s", image_prompt="a hill", yt_title="T", yt_description="d",
+          yt_tags="[]", mp3_path=str(SONG))
+pipe.produce(job_img)
+assert len([c for c in calls if "api.openai.com" in c[1]]) == openai_before + 1  # picture mode draws a cover again
+db.kv_set("bg_mode", "video")
 
 # 4) queue priority: user jobs first
 db.update(job3, status="queued")

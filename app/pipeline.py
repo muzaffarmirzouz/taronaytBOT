@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import claude_api, images, mureka, video, youtube
+from . import backgrounds, claude_api, images, mureka, video, youtube
 
 log = logging.getLogger("pipeline")
 
@@ -79,6 +79,17 @@ class Pipeline:
     def add_auto_job(self, theme: str = "") -> int:
         return self.db.add_job("auto", theme=theme or self.pick_idea())
 
+    def _pick_background(self, job_id: int):
+        """One of the owner's looping clips (different from last time for this song), or None."""
+        if self.db.kv_get("bg_mode", "video") != "video":
+            return None
+        prev = self.db.kv_get(f"bg:{job_id}", "")
+        pick = backgrounds.pick(self.cfg, exclude=int(prev) if prev.isdigit() else None)
+        if not pick:
+            return None
+        self.db.kv_set(f"bg:{job_id}", str(pick[0]))
+        return pick[1]
+
     # --- produce --------------------------------------------------------
     def produce(self, job_id: int, style: str | None = None) -> None:
         job = self.db.get(job_id)
@@ -110,24 +121,38 @@ class Pipeline:
             job = self.db.get(job_id)
 
         image = folder / "cover.png"
-        if not (job["image_path"] and Path(job["image_path"]).exists()):
-            try:
-                images.generate(self.cfg, job["image_prompt"], image)
-            except Exception as exc:
-                log.warning("job %s: image generation failed (%s); using fallback art", job_id, exc)
+        mp4 = folder / "video.mp4"
+        needs_image = not (job["image_path"] and Path(job["image_path"]).exists())
+        needs_video = not (job["mp4_path"] and Path(job["mp4_path"]).exists())
+        bg = self._pick_background(job_id) if (needs_image or needs_video) else None
+        if (needs_image or needs_video) and not bg:
+            self.db.kv_set(f"bg:{job_id}", "")
+
+        if needs_image:
+            if bg:
+                video.frame_from(bg, image)  # thumbnail source; no image-generation cost
+            else:
                 try:
-                    self.notify(f"⚠️ #{job_id}: rasm chizilmadi, oddiy fon qo'yildi.\nSabab: {str(exc)[:600]}")
-                except Exception:
-                    pass
-                video.fallback_image(image, seed=job_id)
+                    images.generate(self.cfg, job["image_prompt"], image)
+                except Exception as exc:
+                    log.warning("job %s: image generation failed (%s); using fallback art", job_id, exc)
+                    try:
+                        self.notify(f"⚠️ #{job_id}: rasm chizilmadi, oddiy fon qo'yildi.\nSabab: {str(exc)[:600]}")
+                    except Exception:
+                        pass
+                    video.fallback_image(image, seed=job_id)
             self.db.update(job_id, image_path=str(image))
             job = self.db.get(job_id)
 
-        mp4 = folder / "video.mp4"
-        if not (job["mp4_path"] and Path(job["mp4_path"]).exists()):
+        if needs_video:
             prev = self.db.kv_get(f"style:{job_id}", "")
-            style = style or video.pick_style(exclude=prev)
-            video.make_video(Path(job["image_path"]), Path(job["mp3_path"]), mp4, style=style)
+            if bg:
+                style = style if style in ("bars", "wave") else video.pick_style(exclude=prev, allowed=("bars", "wave"))
+                video.make_video(Path(job["image_path"]), Path(job["mp3_path"]), mp4, style=style,
+                                 bg_video=bg, title=job["title"])
+            else:
+                style = style or video.pick_style(exclude=prev)
+                video.make_video(Path(job["image_path"]), Path(job["mp3_path"]), mp4, style=style)
             self.db.kv_set(f"style:{job_id}", style)
             self.db.update(job_id, mp4_path=str(mp4))
 
@@ -166,7 +191,9 @@ class Pipeline:
         tags = json.loads(job["yt_tags"] or "[]")
         thumb = None
         try:
-            thumb = video.make_thumbnail(Path(job["image_path"]), self.job_dir(job_id) / "thumb.jpg")
+            has_bg = bool(self.db.kv_get(f"bg:{job_id}"))
+            thumb = video.make_thumbnail(Path(job["image_path"]), self.job_dir(job_id) / "thumb.jpg",
+                                         title=job["title"] if has_bg else "")
         except Exception as exc:
             log.warning("thumbnail not created: %s", exc)
         try:

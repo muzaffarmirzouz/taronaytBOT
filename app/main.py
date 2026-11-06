@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from . import scheduler
+from . import backgrounds, scheduler
 from .config import Config
 from .claude_api import GENRES
 from .db import DB, STOCK_STATUSES
@@ -29,6 +29,10 @@ Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot tilni (🇺🇿 o'zbekcha / �
 /boshqa [id] — videoni boshqacha qilish (yangi rasm va uslub, qo'shiq o'sha)
 /bekor <id> — qo'shiqni bekor qilish
 /rasm — tayyor videolarga yangi rasm chizib, videoni qayta yig'ish
+🎞 Fon videolar: botga 10–15 soniyalik videolarni yuboring (Telegram'da "video" qilib, fayl emas). Har qo'shiq uchun ulardan biri tasodifiy tanlanib, qo'shiq tugaguncha takrorlanadi; ustida qo'shiq nomi va vizualizatsiya bo'ladi.
+/fonlar — saqlangan fon videolar ro'yxati
+/fon_ochir <id> — fon videoni o'chirish
+/fon_rejim video|rasm — fon: sizning videolaringiz yoki AI rasm
 /toxtat — avtomatik ishlashni to'xtatish (yaratish va joylash)
 /davom — qayta yoqish"""
 
@@ -255,6 +259,7 @@ class Bot:
             f"Tayyor video: {db.count('ready')}\n"
             f"Tasdiq kutayotgan (sizniki): {db.count('review')}\n"
             f"Til tanlashni kutayotgan: {db.count('pending')}\n"
+            f"Fon videolar: {len(backgrounds.list_all(self.cfg))} ta (rejim: {db.kv_get('bg_mode', 'video')})\n"
             f"Tayyorlanmoqda/navbatda: {db.count('queued', 'producing')}\n"
             f"Joylangan: {db.count('posted')} · Xato: {db.count('failed')}\n"
             f"Keyingi joylash: {nxt.strftime('%Y-%m-%d %H:%M')} ({self.cfg.timezone})\n"
@@ -271,6 +276,29 @@ class Bot:
             f"{icons.get(r['status'], '•')} #{r['id']} [{r['source']}] {r['status']} — {r['title'] or '(matn kutilmoqda)'}"
             for r in rows
         )
+
+    def add_background(self, media: dict, chat_id: int) -> None:
+        """Owner sent a clip: turn it into a seamless loop and keep it in the library."""
+        import tempfile
+        from pathlib import Path
+        if int(media.get("file_size") or 0) > 20 * 1024 * 1024:
+            self.tg.send("⚠️ Video 20 MB dan katta: Telegram botlarga shundan kattasini bermaydi. "
+                         "Uni Telegram'da \"fayl\" emas, oddiy \"video\" qilib yuboring (Telegram o'zi siqadi) "
+                         "yoki qisqaroq/siqilgan qilib qayta yuboring.", chat_id)
+            return
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                src = Path(tmp) / "upload.mp4"
+                self.tg.download_file(media["file_id"], src)
+                bg_id, seconds = backgrounds.add(self.cfg, src)
+            total = len(backgrounds.list_all(self.cfg))
+            self.tg.send(f"✅ Fon #{bg_id} qo'shildi ({seconds:.0f} soniya, takrorlanishi silliq qilindi). "
+                         f"Jami fon videolar: {total} ta.", chat_id)
+        except ValueError as exc:
+            self.tg.send(f"⚠️ {exc}", chat_id)
+        except Exception as exc:
+            log.exception("background upload failed")
+            self.tg.send(f"⚠️ Videoni qabul qilib bo'lmadi: {str(exc)[:300]}", chat_id)
 
     def redo_images(self, ids: list, chat_id: int) -> None:
         """Draw a fresh cover for already-finished songs and rebuild their videos (the song is kept)."""
@@ -294,9 +322,14 @@ class Bot:
         if msg.get("from", {}).get("id") != self.cfg.admin_id:
             self.tg.send("Bu bot yopiq.", chat_id)
             return
+        doc = msg.get("document") or {}
+        media = msg.get("video") or msg.get("animation") or (doc if str(doc.get("mime_type", "")).startswith("video/") else None)
+        if media:
+            threading.Thread(target=self.add_background, args=(media, chat_id), daemon=True).start()
+            return
         text = (msg.get("text") or "").strip()
         if not text:
-            self.tg.send("Matn yuboring (sher yoki qo'shiq so'zlari).", chat_id)
+            self.tg.send("Matn yuboring (sher yoki qo'shiq so'zlari) yoki fon uchun video yuboring.", chat_id)
             return
         if text.startswith("/"):
             cmd, _, arg = text.partition(" ")
@@ -328,6 +361,25 @@ class Bot:
                     self.do_cancel(int(arg), chat_id)
                 else:
                     self.tg.send("Foydalanish: /bekor <id>", chat_id)
+            elif cmd == "/fonlar":
+                items = backgrounds.list_all(self.cfg)
+                mode = self.db.kv_get("bg_mode", "video")
+                if not items:
+                    self.tg.send("Fon video yo'q. 10–15 soniyalik videolarni shu yerga yuboring.", chat_id)
+                else:
+                    lines = [f"#{i} ({path.stat().st_size / 1e6:.1f} MB)" for i, path in items]
+                    self.tg.send(f"🎞 Fon videolar: {len(items)} ta (rejim: {mode})\n" + "\n".join(lines)
+                                 + "\n\nO'chirish: /fon_ochir <id>", chat_id)
+            elif cmd == "/fon_ochir":
+                ok = arg.isdigit() and backgrounds.remove(self.cfg, int(arg))
+                self.tg.send(f"🗑 Fon #{arg} o'chirildi." if ok else "Topilmadi. Foydalanish: /fon_ochir <id>", chat_id)
+            elif cmd == "/fon_rejim":
+                if arg in ("video", "rasm"):
+                    self.db.kv_set("bg_mode", arg)
+                    self.tg.send("Fon: sizning videolaringiz 🎞" if arg == "video"
+                                 else "Fon: AI chizgan rasm 🖼", chat_id)
+                else:
+                    self.tg.send("Foydalanish: /fon_rejim video  yoki  /fon_rejim rasm", chat_id)
             elif cmd == "/rasm":
                 ids = [r["id"] for r in self.db.recent(200) if r["status"] == "ready"]
                 if not ids:
