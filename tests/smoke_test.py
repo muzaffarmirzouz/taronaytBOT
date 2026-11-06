@@ -234,14 +234,20 @@ btns.clear()
 bot.handle_callback({"id": "c1", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": f"lang:uz:{pid}"})
 assert db.get(pid)["status"] == "pending" and db.kv_get(f"lang:{pid}") == "uz"  # genre still to be chosen
 assert btns and any(b[1] == f"gen:club:{pid}" for row in btns[-1][1] for b in row), btns
+btns.clear()
 bot.handle_callback({"id": "c2", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": f"gen:club:{pid}"})
-assert db.get(pid)["status"] == "queued" and db.kv_get(f"genre:{pid}") == "club" and bot.wake.is_set()
+assert db.get(pid)["status"] == "pending" and db.kv_get(f"genre:{pid}") == "club"  # voice still to be chosen
+assert btns and any(b[1] == f"voc:male:{pid}" for row in btns[-1][1] for b in row), btns
+bot.handle_callback({"id": "c2b", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": f"voc:male:{pid}"})
+assert db.get(pid)["status"] == "queued" and db.kv_get(f"voice:{pid}") == "male" and bot.wake.is_set()
 bot.handle_callback({"id": "c3", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": f"gen:trap:{pid}"})
 assert db.kv_get(f"genre:{pid}") == "club"  # a second tap changes nothing
 pipe.produce(pid)
 prompt = last_claude["body"]["messages"][0]["content"]
 assert "UZBEK" in prompt and "lyrics in UZBEK" in prompt and "NOT in English" in prompt
 assert "club house" in prompt and "GENRE requested" in prompt and "CLUB STRUCTURE" in prompt
+assert "male lead vocal" in prompt and "VOCALS requested" in prompt
+assert "male lead vocal" in db.get(pid)["style"] and "female" not in db.get(pid)["style"].lower().replace("male and female", "")
 # English choice keeps the old behaviour
 from app import claude_api as _ca  # noqa: E402
 assert "ENGLISH song" in _ca.build_user_message("some poem text here", "", [], "en")

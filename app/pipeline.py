@@ -91,6 +91,14 @@ class Pipeline:
         return pick[1]
 
     # --- produce --------------------------------------------------------
+    def _voice_for(self, job_id: int) -> str:
+        """Chosen voice for this song; automatic songs get one at random (mostly male) and keep it."""
+        voice = self.db.kv_get(f"voice:{job_id}", "")
+        if voice not in claude_api.VOICES:
+            voice = claude_api.pick_voice()
+            self.db.kv_set(f"voice:{job_id}", voice)
+        return voice
+
     def produce(self, job_id: int, style: str | None = None) -> None:
         job = self.db.get(job_id)
         self.db.update(job_id, status="producing", error="")
@@ -102,6 +110,7 @@ class Pipeline:
                 avoid_titles=self.db.recent_titles(25),
                 language=self.db.kv_get(f"lang:{job_id}", "en"),
                 genre=self.db.kv_get(f"genre:{job_id}", ""),
+                voice=self._voice_for(job_id),
             )
             self.db.update(
                 job_id, title=pkg["title"], lyrics=pkg["lyrics"], style=pkg["style"],

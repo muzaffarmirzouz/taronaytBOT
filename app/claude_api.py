@@ -45,7 +45,7 @@ def _extract_json(text: str) -> dict:
     return json.loads(text[start:end + 1])
 
 
-def _validate(data: dict) -> dict:
+def _validate(data: dict, voice: str = "") -> dict:
     required = ["title", "lyrics", "style", "image_prompt", "yt_title", "yt_description", "yt_tags"]
     for key in required:
         if not data.get(key):
@@ -58,7 +58,10 @@ def _validate(data: dict) -> dict:
     data["yt_tags"] = [str(t).strip() for t in tags if str(t).strip()]
     data["title"] = str(data["title"]).strip()[:50]
     data["lyrics"] = _no_intro(str(data["lyrics"]).strip())[:4800]
-    data["style"] = _fast_start(str(data["style"]).strip())
+    style = str(data["style"]).strip()
+    if voice:
+        style = _set_vocal(style, voice, limit=290 - len(FAST_START) - 2)
+    data["style"] = _fast_start(style)
     data["yt_title"] = str(data["yt_title"]).strip()[:100]
     data["yt_description"] = str(data["yt_description"]).strip()[:4000]
     data["theme"] = str(data.get("theme", "")).strip()[:60]
@@ -125,6 +128,32 @@ GENRE_LYRIC_RULES = {
 }
 
 
+VOICES = {
+    "male": ("👨 Erkak ovozi", "deep warm male lead vocal, rich baritone, confident and powerful"),
+    "female": ("👩 Ayol ovozi", "bright female lead vocal, clear and expressive"),
+    "duet": ("👫 Duet", "male and female duet vocals, trading lines and harmonising on the chorus"),
+}
+
+
+def pick_voice(weights=(0.7, 0.25, 0.05)) -> str:
+    """Random voice for automatic songs: mostly male, as the channel owner prefers."""
+    import random
+    return random.choices(["male", "female", "duet"], weights=weights)[0]
+
+
+def _set_vocal(style: str, voice: str, limit: int = 290) -> str:
+    """Replace any vocal descriptor in the style prompt with the chosen voice."""
+    import re
+    if voice not in VOICES:
+        return style
+    style = re.sub(r"\b(?:(?:warm|airy|soft|bright|smooth|deep|powerful|breathy|sweet|silky|raspy|gritty|soulful|"
+                   r"melodic|confident)\s+)*(?:male|female|man|woman|girl|boy)(?:\s*(?:and|&|/)\s*(?:male|female))?"
+                   r"(?:\s+(?:lead|rap|sung|backing))?\s+(?:vocals?|voice|singer|duet)\b", "", style, flags=re.I)
+    style = re.sub(r"\s*,\s*,+", ",", style).strip(" ,;")
+    voice_text = VOICES[voice][1]
+    return (style[: limit - len(voice_text) - 2].rstrip(" ,.;") + ", " + voice_text)[:limit]
+
+
 def genre_key(text: str) -> str:
     """Map a free-text genre/theme (auto songs) to one of the GENRES keys, '' if unknown."""
     t = (text or "").lower()
@@ -152,7 +181,8 @@ UZBEK_BRIEF = (
 )
 
 
-def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: str = "en", genre: str = "") -> str:
+def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: str = "en", genre: str = "",
+                       voice: str = "") -> str:
     parts = []
     if raw_text.strip() and language == "uz":
         parts.append(
@@ -185,6 +215,9 @@ def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: 
             "and the lyrics must fit its energy. (If the owner's text contains a line starting with 'Janr:' or "
             "'Uslub:', that line has priority over this genre.)"
         )
+    if voice in VOICES:
+        parts.append(f"VOCALS requested by the owner: {VOICES[voice][1]}. The \"style\" must describe exactly this vocal "
+                     "(do not mention another singer gender).")
     schema = SCHEMA_HELP
     if language == "uz":
         schema = schema.replace("full song lyrics in ENGLISH", "full song lyrics in UZBEK (Latin script)")
@@ -193,7 +226,7 @@ def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: 
 
 
 def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | None = None,
-                 language: str = "en", genre: str = "") -> dict:
+                 language: str = "en", genre: str = "", voice: str = "") -> dict:
     headers = {
         "x-api-key": cfg.anthropic_key,
         "anthropic-version": "2023-06-01",
@@ -203,7 +236,7 @@ def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | 
         "model": cfg.claude_model,
         "max_tokens": 4000,
         "system": SYSTEM,
-        "messages": [{"role": "user", "content": build_user_message(raw_text, theme, avoid_titles or [], language, genre)}],
+        "messages": [{"role": "user", "content": build_user_message(raw_text, theme, avoid_titles or [], language, genre, voice)}],
     }
     last_err = None
     for attempt in range(3):
@@ -213,7 +246,7 @@ def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | 
         data = resp.json()
         text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
         try:
-            return _validate(_extract_json(text))
+            return _validate(_extract_json(text), voice)
         except (ValueError, json.JSONDecodeError) as exc:
             last_err = exc
             log.warning("Claude reply invalid (attempt %s): %s", attempt + 1, exc)

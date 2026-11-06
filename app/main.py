@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from . import backgrounds, scheduler, video
 from .config import Config
-from .claude_api import GENRES
+from .claude_api import GENRES, VOICES
 from .db import DB, STOCK_STATUSES
 from .pipeline import BudgetExceeded, Pipeline
 from .tg import Telegram
@@ -277,10 +277,24 @@ class Bot:
                 self.tg.answer_callback(cb["id"], "Bu allaqachon boshlangan yoki bekor qilingan.")
                 return
             self.db.kv_set(f"genre:{job['id']}", key)
+            self.tg.answer_callback(cb["id"], GENRES[key][0])
+            self.tg.send_buttons(
+                f"🎤 #{job['id']} ({GENRES[key][0]}). Kim aytsin?",
+                [[(VOICES[k][0], f"voc:{k}:{job['id']}") for k in VOICES],
+                 [("🎲 Tasodifiy", f"voc:rnd:{job['id']}"), ("❌ Bekor", f"del:{job['id']}")]], chat_id)
+            return
+        if data.startswith("voc:"):
+            _, key, raw_id = (data.split(":") + ["", ""])[:3]
+            job = self.db.get(int(raw_id)) if raw_id.isdigit() and (key in VOICES or key == "rnd") else None
+            if not job or job["status"] != "pending":
+                self.tg.answer_callback(cb["id"], "Bu allaqachon boshlangan yoki bekor qilingan.")
+                return
+            if key != "rnd":
+                self.db.kv_set(f"voice:{job['id']}", key)
             self.db.update(job["id"], status="queued")
             self.wake.set()
             self.tg.answer_callback(cb["id"], "Boshlandi")
-            self.tg.send(f"🎶 #{job['id']} tayyorlanmoqda: {GENRES[key][0]}. Tayyor bo'lganda videoni yuboraman "
+            self.tg.send(f"🎶 #{job['id']} tayyorlanmoqda. Tayyor bo'lganda videoni yuboraman "
                          f"va joylash-joylamasligini so'rayman (2–5 daqiqa).", chat_id)
             return
         action, _, raw = data.partition(":")
