@@ -73,20 +73,33 @@ def frame_from(video_path: Path, out_path: Path) -> Path:
 
 def make_loop(src: Path, out_path: Path, max_seconds: int = 30) -> Path:
     """Normalise an owner's clip to 1080p/24fps and blend its end into its start so that,
-    played on repeat, there is no visible jump."""
-    d = min(probe_duration(src), float(max_seconds))
-    if d < 2:
-        raise ValueError("Video juda qisqa (kamida 2 soniya bo'lsin)")
-    f = min(1.0, d / 4)
-    graph = (
-        "[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=24,format=yuv420p,"
-        f"trim=duration={d:.3f},setpts=PTS-STARTPTS,split[a][b];"
-        f"[a]trim=start={f:.3f},setpts=PTS-STARTPTS[tail];[b]trim=end={f:.3f},setpts=PTS-STARTPTS[head];"
-        f"[tail][head]xfade=transition=fade:duration={f:.3f}:offset={d - 2 * f:.3f},format=yuv420p[v]"
-    )
+    played on repeat, there is no visible jump. Works in two steps so odd inputs (audio longer
+    than video, variable fps, rotation, 10-bit) cannot break the crossfade timing."""
+    import tempfile
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    _run(["ffmpeg", "-y", "-i", str(src), "-filter_complex", graph, "-map", "[v]", "-an",
-          "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-movflags", "+faststart", str(out_path)])
+    with tempfile.TemporaryDirectory() as tmp:
+        norm = Path(tmp) / "norm.mp4"
+        _run(["ffmpeg", "-y", "-i", str(src), "-t", str(max_seconds), "-map", "0:v:0", "-an",
+              "-vf", "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,fps=24,format=yuv420p",
+              "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", str(norm)], timeout=600)
+        d = probe_duration(norm) - 0.08  # a little margin: the container can be longer than the last frame
+        if d < 2:
+            raise ValueError("Video juda qisqa (kamida 2 soniya bo'lsin)")
+        f = min(1.0, d / 4)
+        graph = (
+            "[0:v]split[a][b];"
+            f"[a]trim=start={f:.3f}:end={d:.3f},setpts=PTS-STARTPTS[tail];[b]trim=end={f:.3f},setpts=PTS-STARTPTS[head];"
+            f"[tail][head]xfade=transition=fade:duration={f:.3f}:offset={d - 2 * f:.3f},format=yuv420p[v]"
+        )
+        try:
+            _run(["ffmpeg", "-y", "-i", str(norm), "-filter_complex", graph, "-map", "[v]", "-an",
+                  "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-movflags", "+faststart", str(out_path)],
+                 timeout=600)
+            if probe_duration(out_path) < 1:
+                raise RuntimeError("empty loop")
+        except Exception:
+            log.exception("crossfade failed; storing the plain normalised clip")
+            _run(["ffmpeg", "-y", "-i", str(norm), "-c", "copy", "-movflags", "+faststart", str(out_path)])
     return out_path
 
 
