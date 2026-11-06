@@ -103,6 +103,18 @@ def make_loop(src: Path, out_path: Path, max_seconds: int = 30) -> Path:
     return out_path
 
 
+def make_preview(src: Path, out_path: Path, max_mb: float = 40.0) -> Path:
+    """Small, low-quality copy for showing in Telegram (bots can send <=50 MB). The full-quality file is what YouTube gets."""
+    dur = max(probe_duration(src), 1.0)
+    audio_k = 96
+    video_k = int(max(150, min(1500, (max_mb * 8192 / dur) - audio_k)))
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    _run(["ffmpeg", "-y", "-i", str(src), "-vf", "scale=640:-2,fps=20", "-c:v", "libx264", "-preset", "veryfast",
+          "-b:v", f"{video_k}k", "-maxrate", f"{int(video_k * 1.4)}k", "-bufsize", f"{video_k * 2}k",
+          "-c:a", "aac", "-b:a", f"{audio_k}k", "-movflags", "+faststart", str(out_path)], timeout=900)
+    return out_path
+
+
 def concat_clips(srcs: list, out_path: Path) -> Path:
     """Join several clips (any size/fps) into one 1080p/24fps clip, in the given order."""
     if len(srcs) < 2:

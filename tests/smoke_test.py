@@ -265,6 +265,37 @@ bot.add_background({"file_id": "big", "file_size": 30_000_000}, 1)  # too big: r
 assert len(backgrounds.list_all(cfg)) == 2
 assert backgrounds.pick(cfg, exclude=1)[0] == 2
 
+# preview for big videos + video list + queue while YouTube is blocked
+_pv = TMP / "preview_test.mp4"
+video.make_preview(TMP / "style_pulse.mp4", _pv)
+assert _pv.exists() and _pv.stat().st_size > 1000
+_w = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width", "-of", "csv=p=0", str(_pv)],
+                    capture_output=True, text=True).stdout.strip()
+assert _w == "640", _w
+_calls = []
+class _TG2:
+    def send(self, *a, **k): _calls.append(("send", a))
+    def send_buttons(self, text, rows, chat_id=None): _calls.append(("buttons", text, rows))
+    def send_video(self, path, caption="", buttons=None, chat_id=None): _calls.append(("video", str(path))); return True
+    def answer_callback(self, *a, **k): pass
+_old_tg = bot.tg; bot.tg = _TG2()
+_jr = db.add_job("user", raw_text="q" * 30)
+db.update(_jr, status="review", title="Preview Song", yt_title="T", mp4_path=str(TMP / "style_pulse.mp4"), mp3_path=str(SONG))
+bot.list_videos(1)
+assert any(c[0] == "buttons" and f"show:{_jr}" in str(c[2]) for c in _calls), _calls
+bot.handle_callback({"id": "s1", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": f"show:{_jr}"})
+import time as _t2
+for _ in range(50):
+    if any(c[0] == "video" for c in _calls): break
+    _t2.sleep(0.1)
+assert any(c[0] == "video" for c in _calls)
+db.kv_set("post_block_until", str(_t2.time() + 3600))
+bot.do_post(_jr, 1)
+assert db.get(_jr)["status"] == "ready"  # queued, not an error
+db.kv_set("post_block_until", "0")
+db.update(_jr, status="cancelled")
+bot.tg = _old_tg
+
 # collect mode: videos wait, Tayyor joins them into ONE background
 n_before = len(backgrounds.list_all(cfg))
 bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "video": {"file_id": "m1", "file_size": 3_000_000}})

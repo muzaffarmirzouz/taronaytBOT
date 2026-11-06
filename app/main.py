@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from . import backgrounds, scheduler
+from . import backgrounds, scheduler, video
 from .config import Config
 from .claude_api import GENRES
 from .db import DB, STOCK_STATUSES
@@ -24,6 +24,7 @@ Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot tilni (🇺🇿 o'zbekcha / �
 
 /holat — navbat, keyingi joylash vaqti, bugungi sarf
 /navbat — oxirgi 10 ta qo'shiq
+/videolar — tayyor/tasdiq kutayotgan videolar ro'yxati; bosib ko'rish (katta videolar past sifatda ko'rsatiladi)
 /yarat [mavzu] — hoziroq yangi qo'shiq yaratish (mavzu ixtiyoriy)
 /joyla [id] — tasdiqlanayotgan (yoki keyingi tayyor) videoni YouTube'ga joylash
 /boshqa [id] — videoni boshqacha qilish (yangi rasm va uslub, qo'shiq o'sha)
@@ -141,17 +142,45 @@ class Bot:
             self.db.kv_set("done_slots", json.dumps(sorted(done)[-30:]))
 
     # --- owner review: video + [Post] [Another version] [Cancel] --------
+    def show_video(self, job: dict, caption: str, buttons: list, chat_id: int | None = None) -> bool:
+        """Show a video in Telegram. Big files are sent as a small low-quality preview; YouTube still gets the full file."""
+        from pathlib import Path
+        path = Path(job["mp4_path"] or "")
+        if not path.exists():
+            return False
+        if path.stat().st_size > 45 * 1024 * 1024:
+            prev = self.pipeline.job_dir(job["id"]) / "preview.mp4"
+            try:
+                if not prev.exists() or prev.stat().st_mtime < path.stat().st_mtime:
+                    video.make_preview(path, prev)
+                path = prev
+                caption += "\n(ko'rsatish uchun past sifat; YouTube'ga to'liq sifatda ketadi)"
+            except Exception:
+                log.exception("preview failed")
+                return False
+        return self.tg.send_video(path, caption, buttons, chat_id)
+
     def send_review(self, job_id: int) -> None:
         job = self.db.get(job_id)
         caption = (f"🎬 #{job_id} {job['title']}\n{job['yt_title']}\n\n"
                    f"Yoqdimi? YouTube'ga joylaymi?")
         buttons = [("✅ Joylash", f"post:{job_id}"), ("🔄 Boshqa qil", f"redo:{job_id}"),
                    ("❌ Bekor", f"del:{job_id}")]
-        if not self.tg.send_video(job["mp4_path"], caption, buttons):
+        if not self.show_video(job, caption, buttons):
             # video too big / upload failed: fall back to audio + text commands
             self.tg.send_audio(job["mp3_path"], title=job["title"], caption=caption)
             self.tg.send(f"Video yuborilmadi (hajmi katta bo'lishi mumkin).\n"
                          f"/joyla {job_id} — joylash · /boshqa {job_id} — boshqacha qilish · /bekor {job_id}")
+
+    def list_videos(self, chat_id: int) -> None:
+        rows = [r for r in self.db.recent(60) if r["status"] in ("ready", "review") and r["mp4_path"]]
+        if not rows:
+            self.tg.send("Tayyor video yo'q. /yarat bilan yangisini tayyorlang.", chat_id)
+            return
+        blocked = time.time() < float(self.db.kv_get("post_block_until", "0") or 0)
+        head = "🎬 Tayyor videolar (bosib ko'ring)" + (" — YouTube limiti hozir yopiq, videolar saqlanadi" if blocked else "")
+        icons = {"ready": "⏳", "review": "👀"}
+        self.tg.send_buttons(head, [[(f"{icons[r['status']]} #{r['id']} {r['title'][:40]}", f"show:{r['id']}")] for r in rows[:20]], chat_id)
 
     def genre_rows(self, job_id: int) -> list:
         items = [(label, f"gen:{key}:{job_id}") for key, (label, _) in GENRES.items()]
@@ -171,6 +200,10 @@ class Bot:
             self.tg.send(f"#{job_id} allaqachon joylangan: https://youtu.be/{job['youtube_id']}", chat_id)
         elif job["status"] not in ("review", "ready"):
             self.tg.send(f"#{job_id} hozir joylab bo'lmaydi (holati: {job['status']}).", chat_id)
+        elif time.time() < float(self.db.kv_get("post_block_until", "0") or 0) and job["status"] == "review":
+            self.db.update(job_id, status="ready")
+            self.tg.send(f"📥 #{job_id} «{job['title']}» navbatga qo'yildi. YouTube limiti ochilgach jadval bo'yicha o'zi joylanadi "
+                         f"(yoki /joyla {job_id}).", chat_id)
         else:
             self.tg.send(f"📤 Joylanmoqda: #{job_id} {job['title']}", chat_id)
             self.post_busy = False
@@ -212,6 +245,19 @@ class Bot:
             self.tg.answer_callback(cb["id"], "Ok")
             target = self.merge_finish if data == "mg:done" else self.merge_cancel
             threading.Thread(target=target, args=(chat_id,), daemon=True).start()
+            return
+        if data.startswith("show:"):
+            raw = data.split(":")[1]
+            job = self.db.get(int(raw)) if raw.isdigit() else None
+            if not job or job["status"] not in ("ready", "review", "posted"):
+                self.tg.answer_callback(cb["id"], "Topilmadi.")
+                return
+            self.tg.answer_callback(cb["id"], "Yuborilmoqda...")
+            jid = job["id"]
+            btns = [] if job["status"] == "posted" else [
+                ("✅ Joylash", f"post:{jid}"), ("🔄 Boshqa qil", f"redo:{jid}"), ("❌ Bekor", f"del:{jid}")]
+            threading.Thread(target=lambda: self.show_video(job, f"🎬 #{jid} {job['title']}\n{job['yt_title']}", btns, chat_id)
+                             or self.tg.send("Videoni yuborib bo'lmadi.", chat_id), daemon=True).start()
             return
         if data.startswith("lang:"):
             _, lang, raw_id = (data.split(":") + ["", ""])[:3]
@@ -453,6 +499,8 @@ class Bot:
             elif cmd == "/yarat":
                 job_id = self.pipeline.add_auto_job(arg and f"{arg} | {arg}")
                 self.tg.send(f"Navbatga qo'shildi #{job_id}. Tayyor bo'lganda xabar beraman.", chat_id)
+            elif cmd in ("/videolar", "/tayyorlar"):
+                self.list_videos(chat_id)
             elif cmd == "/joyla":
                 target = int(arg) if arg.isdigit() else (self.latest_review() or (self.db.next_ready() or {}).get("id"))
                 if not target:
