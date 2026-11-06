@@ -174,6 +174,7 @@ from app.main import Bot  # noqa: E402
 bot = Bot.__new__(Bot)
 import threading as _th  # noqa: E402
 bot.db, bot.pipeline, bot.produce_lock = db, pipe, _th.Lock()
+bot.merge_lock, bot.merge_timer = _th.RLock(), None
 class _TG:
     def send(self, *a, **k): sent.append(a)
 bot.tg = _TG()
@@ -255,10 +256,8 @@ LONG = TMP / "long.mp3"
 sh("ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=330:duration=25", "-c:a", "libmp3lame", str(LONG))
 assert backgrounds.pick(cfg) is None  # empty library -> normal AI cover
 bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "video": {"file_id": "f1", "file_size": 3_000_000}})
-for _ in range(100):
-    if backgrounds.list_all(cfg):
-        break
-    import time as _t; _t.sleep(0.2)
+assert not backgrounds.list_all(cfg)  # waits for Tayyor
+bot.merge_finish(1)  # a single clip is stored as it is
 assert len(backgrounds.list_all(cfg)) == 1, backgrounds.list_all(cfg)
 bid, secs = backgrounds.add(cfg, CLIP)
 assert bid == 2 and 8.5 < secs < 9.5, (bid, secs)  # 10 s clip -> 9 s seamless loop
@@ -266,20 +265,25 @@ bot.add_background({"file_id": "big", "file_size": 30_000_000}, 1)  # too big: r
 assert len(backgrounds.list_all(cfg)) == 2
 assert backgrounds.pick(cfg, exclude=1)[0] == 2
 
-# merge mode: two clips -> one background
+# collect mode: videos wait, Tayyor joins them into ONE background
 n_before = len(backgrounds.list_all(cfg))
-bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "text": "/tayyor"})  # without /birlash: nothing happens
-assert len(backgrounds.list_all(cfg)) == n_before
-bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "text": "/birlash"})
 bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "video": {"file_id": "m1", "file_size": 3_000_000}})
 bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "video": {"file_id": "m2", "file_size": 3_000_000}})
-assert len(backgrounds.list_all(cfg)) == n_before  # not stored separately
-bot.merge_finish(1)
+assert len(backgrounds.list_all(cfg)) == n_before  # nothing stored until Tayyor
+bot.handle_callback({"id": "c1", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": "mg:done"})
+for _ in range(300):
+    if bot.db.kv_get("merge_mode") == "0" and len(backgrounds.list_all(cfg)) > n_before and not bot.merge_dir().exists():
+        break
+    import time as _t; _t.sleep(0.2)
 assert len(backgrounds.list_all(cfg)) == n_before + 1
 mid, mpath = backgrounds.list_all(cfg)[-1]
 assert video.probe_duration(mpath) > 15, video.probe_duration(mpath)  # ~2 x 10 s joined
 assert bot.db.kv_get("merge_mode") == "0"
-backgrounds.remove(cfg, mid)
+# existing backgrounds can be joined too
+ids_now = [i for i, _ in backgrounds.list_all(cfg)]
+bot.join_existing([1, 2], 1)
+assert 1 not in dict(backgrounds.list_all(cfg)) and 2 not in dict(backgrounds.list_all(cfg))
+assert len(backgrounds.list_all(cfg)) == len(ids_now) - 1  # two clips became one
 
 job_bg = db.add_job("user", raw_text="z" * 30)
 db.update(job_bg, lyrics="[Verse]\nhi", title="Samarkand Smile", style="s", yt_title="T", yt_description="d",
@@ -287,7 +291,7 @@ db.update(job_bg, lyrics="[Verse]\nhi", title="Samarkand Smile", style="s", yt_t
 openai_before = len([c for c in calls if "api.openai.com" in c[1]])
 pipe.produce(job_bg)
 jb = db.get(job_bg)
-assert jb["status"] == "review" and db.kv_get(f"bg:{job_bg}") in ("1", "2")
+assert jb["status"] == "review" and db.kv_get(f"bg:{job_bg}") in [str(i) for i, _ in backgrounds.list_all(cfg)]
 assert len([c for c in calls if "api.openai.com" in c[1]]) == openai_before  # no paid image
 assert db.kv_get(f"style:{job_bg}") in ("bars", "wave")
 dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",

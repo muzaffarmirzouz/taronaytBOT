@@ -30,8 +30,8 @@ Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot tilni (🇺🇿 o'zbekcha / �
 /bekor <id> — qo'shiqni bekor qilish
 /rasm — tayyor videolarga yangi rasm chizib, videoni qayta yig'ish
 🎞 Fon videolar: botga 10–15 soniyalik videolarni yuboring (Telegram'da "video" qilib, fayl emas). Har qo'shiq uchun ulardan biri tasodifiy tanlanib, qo'shiq tugaguncha takrorlanadi; ustida qo'shiq nomi va vizualizatsiya bo'ladi.
-/birlash — bir nechta videoni (masalan 2 ta 8 soniyalik) bitta fon qilish: avval shuni yozing, videolarni ketma-ket yuboring, so'ng /tayyor
-/tayyor — yuborilgan videolarni birlashtirib, bitta fon sifatida saqlash
+/tayyor — yuborilgan videolarni bitta fon qilib saqlash (✅ Tayyor tugmasi bilan bir xil)
+/fon_qosh 1 2 — allaqachon saqlangan fonlarni bitta qilib birlashtirish
 /fonlar — saqlangan fon videolar ro'yxati
 /fon_ochir <id> — fon videoni o'chirish
 /fon_rejim video|rasm — fon: sizning videolaringiz yoki AI rasm
@@ -45,6 +45,8 @@ class Bot:
         self.db = DB(cfg.data_dir / "bot.sqlite3")
         self.tg = Telegram(cfg.telegram_token, cfg.admin_id)
         self.pipeline = Pipeline(cfg, self.db, self.tg.send)
+        self.merge_lock = threading.RLock()
+        self.merge_timer = None
         self.tz = ZoneInfo(cfg.timezone)
         self.produce_lock = threading.Lock()
         self.wake = threading.Event()  # set when the owner sends a poem, so work starts at once
@@ -202,6 +204,11 @@ class Bot:
             self.tg.answer_callback(cb["id"], "Bu bot yopiq.")
             return
         data = cb.get("data") or ""
+        if data in ("mg:done", "mg:cancel"):
+            self.tg.answer_callback(cb["id"], "Ok")
+            target = self.merge_finish if data == "mg:done" else self.merge_cancel
+            threading.Thread(target=target, args=(chat_id,), daemon=True).start()
+            return
         if data.startswith("lang:"):
             _, lang, raw_id = (data.split(":") + ["", ""])[:3]
             job = self.db.get(int(raw_id)) if raw_id.isdigit() and lang in ("uz", "en") else None
@@ -308,36 +315,82 @@ class Bot:
         return d
 
     def merge_collect(self, media: dict, chat_id: int) -> None:
+        """Owner sent a clip: keep it aside; when they press Tayyor all clips become ONE background."""
         if int(media.get("file_size") or 0) > 20 * 1024 * 1024:
-            self.tg.send("⚠️ Video 20 MB dan katta. Oddiy \"video\" qilib yuboring.", chat_id)
+            self.tg.send("⚠️ Video 20 MB dan katta: Telegram botlarga shundan kattasini bermaydi. "
+                         "Uni \"fayl\" emas, oddiy \"video\" qilib yuboring yoki qisqaroq/siqilgan qilib qayta yuboring.", chat_id)
             return
-        n = len(list(self.merge_dir().glob("part_*.mp4"))) + 1
-        try:
-            self.tg.download_file(media["file_id"], self.merge_dir() / f"part_{n:02d}.mp4")
-            self.tg.send(f"➕ {n}-video qabul qilindi. Yana yuboring yoki /tayyor deb yozing.", chat_id)
-        except Exception as exc:
-            log.exception("merge download failed")
-            self.tg.send(f"⚠️ Videoni olib bo'lmadi: {str(exc)[:300]}", chat_id)
+        with self.merge_lock:
+            n = len(list(self.merge_dir().glob("part_*.mp4"))) + 1
+            try:
+                self.tg.download_file(media["file_id"], self.merge_dir() / f"part_{n:02d}.mp4")
+            except Exception as exc:
+                log.exception("merge download failed")
+                self.tg.send(f"⚠️ Videoni olib bo'lmadi: {str(exc)[:300]}", chat_id)
+                return
+        self.db.kv_set("merge_mode", "1")
+        if self.merge_timer:
+            self.merge_timer.cancel()
+        self.merge_timer = threading.Timer(300, self.merge_finish, args=(chat_id,))
+        self.merge_timer.daemon = True
+        self.merge_timer.start()
+        self.tg.send_buttons(
+            f"➕ {n}-video qabul qilindi. Yana video yuborsangiz, hammasi ketma-ket BITTA fon bo'lib ulanadi.\n"
+            "Tugagach ✅ Tayyor ni bosing (5 daqiqada o'zi saqlaydi).",
+            [("✅ Tayyor", "mg:done"), ("🗑 Bekor", "mg:cancel")], chat_id)
 
     def merge_finish(self, chat_id: int) -> None:
         import shutil
-        parts = sorted(self.merge_dir().glob("part_*.mp4"))
+        if self.merge_timer:
+            self.merge_timer.cancel()
+            self.merge_timer = None
+        with self.merge_lock:
+            parts = sorted(self.merge_dir().glob("part_*.mp4"))
+            self.db.kv_set("merge_mode", "0")
+            if not parts:
+                self.tg.send("Hozircha video yo'q. Videolarni yuboring.", chat_id)
+                return
+            self.tg.send(f"⏳ {len(parts)} ta video {'birlashtirilmoqda' if len(parts) > 1 else 'tayyorlanmoqda'}...", chat_id)
+            try:
+                if len(parts) == 1:
+                    bg_id, seconds = backgrounds.add(self.cfg, parts[0])
+                else:
+                    bg_id, seconds = backgrounds.add_many(self.cfg, parts)
+                total = len(backgrounds.list_all(self.cfg))
+                self.tg.send(f"✅ Fon #{bg_id} tayyor ({seconds:.0f} soniya, {len(parts)} ta videodan). "
+                             f"Jami fon videolar: {total} ta.", chat_id)
+            except Exception as exc:
+                log.exception("background build failed")
+                self.tg.send(f"⚠️ Fonni tayyorlab bo'lmadi: {str(exc)[:300]}", chat_id)
+            finally:
+                shutil.rmtree(self.merge_dir(), ignore_errors=True)
+
+    def merge_cancel(self, chat_id: int) -> None:
+        import shutil
+        if self.merge_timer:
+            self.merge_timer.cancel()
+            self.merge_timer = None
+        with self.merge_lock:
+            shutil.rmtree(self.merge_dir(), ignore_errors=True)
         self.db.kv_set("merge_mode", "0")
-        if len(parts) < 2:
-            self.tg.send("⚠️ Birlashtirish uchun kamida 2 ta video kerak. /birlash dan qayta boshlang.", chat_id)
-            shutil.rmtree(self.merge_dir(), ignore_errors=True)
+        self.tg.send("🗑 Yuborilgan videolar bekor qilindi.", chat_id)
+
+    def join_existing(self, ids: list, chat_id: int) -> None:
+        """Join already-saved backgrounds into one new background and remove the originals."""
+        have = dict(backgrounds.list_all(self.cfg))
+        paths = [have[i] for i in ids if i in have]
+        if len(paths) < 2 or len(paths) != len(ids):
+            self.tg.send("Foydalanish: /fon_qosh 1 2  (mavjud fon raqamlari, kamida 2 ta; /fonlar ro'yxatiga qarang)", chat_id)
             return
-        self.tg.send(f"⏳ {len(parts)} ta video birlashtirilmoqda...", chat_id)
+        self.tg.send("⏳ Birlashtirilmoqda...", chat_id)
         try:
-            bg_id, seconds = backgrounds.add_many(self.cfg, parts)
-            total = len(backgrounds.list_all(self.cfg))
-            self.tg.send(f"✅ Fon #{bg_id} tayyor ({seconds:.0f} soniya, {len(parts)} ta videodan). "
-                         f"Jami fon videolar: {total} ta.", chat_id)
+            bg_id, seconds = backgrounds.add_many(self.cfg, paths)
+            for i in ids:
+                backgrounds.remove(self.cfg, i)
+            self.tg.send(f"✅ Fon #{bg_id} tayyor ({seconds:.0f} soniya). #{', #'.join(map(str, ids))} o'rniga.", chat_id)
         except Exception as exc:
-            log.exception("merge failed")
+            log.exception("join existing failed")
             self.tg.send(f"⚠️ Birlashtirib bo'lmadi: {str(exc)[:300]}", chat_id)
-        finally:
-            shutil.rmtree(self.merge_dir(), ignore_errors=True)
 
     def redo_images(self, ids: list, chat_id: int) -> None:
         """Draw a fresh cover for already-finished songs and rebuild their videos (the song is kept)."""
@@ -363,11 +416,8 @@ class Bot:
             return
         doc = msg.get("document") or {}
         media = msg.get("video") or msg.get("animation") or (doc if str(doc.get("mime_type", "")).startswith("video/") else None)
-        if media and self.db.kv_get("merge_mode", "0") == "1":
-            self.merge_collect(media, chat_id)
-            return
         if media:
-            threading.Thread(target=self.add_background, args=(media, chat_id), daemon=True).start()
+            self.merge_collect(media, chat_id)
             return
         text = (msg.get("text") or "").strip()
         if not text:
@@ -379,17 +429,11 @@ class Bot:
             arg = arg.strip()
             if cmd in ("/start", "/help"):
                 self.tg.send(HELP, chat_id)
-            elif cmd == "/birlash":
-                import shutil
-                shutil.rmtree(self.merge_dir(), ignore_errors=True)
-                self.db.kv_set("merge_mode", "1")
-                self.tg.send("🎞 Birlashtirish rejimi yoqildi. Videolarni ketma-ket yuboring (\"video\" qilib), "
-                             "tugagach /tayyor deb yozing.", chat_id)
             elif cmd == "/tayyor":
-                if self.db.kv_get("merge_mode", "0") == "1":
-                    threading.Thread(target=self.merge_finish, args=(chat_id,), daemon=True).start()
-                else:
-                    self.tg.send("Avval /birlash deb yozing, so'ng videolarni yuboring.", chat_id)
+                threading.Thread(target=self.merge_finish, args=(chat_id,), daemon=True).start()
+            elif cmd == "/fon_qosh":
+                ids = [int(x) for x in arg.replace(",", " ").split() if x.isdigit()]
+                threading.Thread(target=self.join_existing, args=(ids, chat_id), daemon=True).start()
             elif cmd == "/holat":
                 self.tg.send(self.status_text(), chat_id)
             elif cmd == "/navbat":
