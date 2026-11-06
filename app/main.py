@@ -47,6 +47,7 @@ class Bot:
         self.pipeline = Pipeline(cfg, self.db, self.tg.send)
         self.merge_lock = threading.RLock()
         self.merge_timer = None
+        self.post_busy = False
         self.tz = ZoneInfo(cfg.timezone)
         self.produce_lock = threading.Lock()
         self.wake = threading.Event()  # set when the owner sends a poem, so work starts at once
@@ -127,6 +128,8 @@ class Bot:
         key = scheduler.due_slot(now, self.cfg.post_times, done)
         if not key:
             return
+        if time.time() < float(self.db.kv_get("post_block_until", "0") or 0):
+            return
         job = self.db.next_ready()
         if not job:
             if self.db.kv_get("no_video_notified") != key:
@@ -170,7 +173,8 @@ class Bot:
             self.tg.send(f"#{job_id} hozir joylab bo'lmaydi (holati: {job['status']}).", chat_id)
         else:
             self.tg.send(f"📤 Joylanmoqda: #{job_id} {job['title']}", chat_id)
-            if not self.post_job(job_id):
+            self.post_busy = False
+            if not self.post_job(job_id) and self.post_busy:
                 self.tg.send("Boshqa joylash davom etyapti, birozdan keyin qayta urining.", chat_id)
 
     def do_redo(self, job_id: int, chat_id: int) -> None:
@@ -246,6 +250,7 @@ class Bot:
 
     def post_job(self, job_id: int) -> bool:
         if not self.publish_lock.acquire(blocking=False):
+            self.post_busy = True
             return False
         try:
             video_id = self.pipeline.publish(job_id)
@@ -254,7 +259,14 @@ class Bot:
             return True
         except Exception as exc:
             log.exception("publish failed")
-            self.tg.send(f"⚠️ Joylashda xatolik: {str(exc)[:400]}")
+            if "uploadLimitExceeded" in str(exc):
+                # YouTube's daily upload cap: stop retrying every 30 s, try again in an hour
+                self.db.kv_set("post_block_until", str(time.time() + 3600))
+                self.tg.send("⚠️ YouTube bugungi yuklash limitiga yetdi (uploadLimitExceeded). Video saqlanib turibdi, "
+                             "yo'qolmaydi. Odatda limit ~24 soatda tiklanadi; avtomatik rejim 1 soatdan keyin qayta uriniladi. "
+                             "Kanalni telefon raqam bilan tasdiqlasangiz (youtube.com/verify) limit ancha oshadi.")
+            else:
+                self.tg.send(f"⚠️ Joylashda xatolik: {str(exc)[:400]}")
             return False
         finally:
             self.publish_lock.release()
