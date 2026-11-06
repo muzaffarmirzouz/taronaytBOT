@@ -23,6 +23,8 @@ SCHEMA_HELP = """Return a JSON object with exactly these keys:
   a memorable repeated hook in the chorus. Original wording only.
 - "style": music style prompt for the song generator, max 220 characters: genre, mood, tempo/BPM, vocal type
   (e.g. warm male vocal / airy female vocal), 3-4 instruments. NEVER mention real artists, bands or songs.
+  The song must get to the vocals FAST: include "very short 4-bar intro, vocals start within 10 seconds" in the style.
+  The lyrics must start directly with the first verse or the chorus: NO [Intro] tag and no instrumental opening section.
 - "image_prompt": a vivid prompt for a 3:2 landscape illustration that visualises THIS song's theme and story: one clear
   scene built from concrete places, objects, weather, light and mood named in the lyrics (not a generic backdrop). Vary
   the art style from song to song (cinematic photo, watercolor, anime-style landscape, neon synthwave, oil painting...). It must contain no text, letters, logos or watermarks and no real people or celebrities.
@@ -55,12 +57,29 @@ def _validate(data: dict) -> dict:
         tags = [t.strip() for t in tags.split(",")]
     data["yt_tags"] = [str(t).strip() for t in tags if str(t).strip()]
     data["title"] = str(data["title"]).strip()[:50]
-    data["lyrics"] = str(data["lyrics"]).strip()[:4800]
-    data["style"] = str(data["style"]).strip()[:290]
+    data["lyrics"] = _no_intro(str(data["lyrics"]).strip())[:4800]
+    data["style"] = _fast_start(str(data["style"]).strip())
     data["yt_title"] = str(data["yt_title"]).strip()[:100]
     data["yt_description"] = str(data["yt_description"]).strip()[:4000]
     data["theme"] = str(data.get("theme", "")).strip()[:60]
     return data
+
+
+FAST_START = "short 4-bar intro, vocals start within 10 seconds"
+
+
+def _fast_start(style: str, limit: int = 290) -> str:
+    """Songs were opening with a minute of music: always ask the generator for an immediate vocal entrance."""
+    if "vocals start" not in style.lower():
+        style = style[: limit - len(FAST_START) - 2].rstrip(" ,.;") + ", " + FAST_START
+    return style[:limit]
+
+
+def _no_intro(lyrics: str) -> str:
+    """Drop [Intro]/[Instrumental] sections at the start so the vocals come in right away."""
+    import re
+    out = re.sub(r"^\s*\[(?:intro|instrumental|music|build[- ]?up)[^\]]*\][^\[]*", "", lyrics, flags=re.I)
+    return out.strip() or lyrics
 
 
 # key -> (button label, instruction for the music style)
