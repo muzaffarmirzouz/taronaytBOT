@@ -30,6 +30,8 @@ Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot tilni (🇺🇿 o'zbekcha / �
 /bekor <id> — qo'shiqni bekor qilish
 /rasm — tayyor videolarga yangi rasm chizib, videoni qayta yig'ish
 🎞 Fon videolar: botga 10–15 soniyalik videolarni yuboring (Telegram'da "video" qilib, fayl emas). Har qo'shiq uchun ulardan biri tasodifiy tanlanib, qo'shiq tugaguncha takrorlanadi; ustida qo'shiq nomi va vizualizatsiya bo'ladi.
+/birlash — bir nechta videoni (masalan 2 ta 8 soniyalik) bitta fon qilish: avval shuni yozing, videolarni ketma-ket yuboring, so'ng /tayyor
+/tayyor — yuborilgan videolarni birlashtirib, bitta fon sifatida saqlash
 /fonlar — saqlangan fon videolar ro'yxati
 /fon_ochir <id> — fon videoni o'chirish
 /fon_rejim video|rasm — fon: sizning videolaringiz yoki AI rasm
@@ -300,6 +302,43 @@ class Bot:
             log.exception("background upload failed")
             self.tg.send(f"⚠️ Videoni qabul qilib bo'lmadi: {str(exc)[:300]}", chat_id)
 
+    def merge_dir(self):
+        d = self.cfg.data_dir / "merge_tmp"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def merge_collect(self, media: dict, chat_id: int) -> None:
+        if int(media.get("file_size") or 0) > 20 * 1024 * 1024:
+            self.tg.send("⚠️ Video 20 MB dan katta. Oddiy \"video\" qilib yuboring.", chat_id)
+            return
+        n = len(list(self.merge_dir().glob("part_*.mp4"))) + 1
+        try:
+            self.tg.download_file(media["file_id"], self.merge_dir() / f"part_{n:02d}.mp4")
+            self.tg.send(f"➕ {n}-video qabul qilindi. Yana yuboring yoki /tayyor deb yozing.", chat_id)
+        except Exception as exc:
+            log.exception("merge download failed")
+            self.tg.send(f"⚠️ Videoni olib bo'lmadi: {str(exc)[:300]}", chat_id)
+
+    def merge_finish(self, chat_id: int) -> None:
+        import shutil
+        parts = sorted(self.merge_dir().glob("part_*.mp4"))
+        self.db.kv_set("merge_mode", "0")
+        if len(parts) < 2:
+            self.tg.send("⚠️ Birlashtirish uchun kamida 2 ta video kerak. /birlash dan qayta boshlang.", chat_id)
+            shutil.rmtree(self.merge_dir(), ignore_errors=True)
+            return
+        self.tg.send(f"⏳ {len(parts)} ta video birlashtirilmoqda...", chat_id)
+        try:
+            bg_id, seconds = backgrounds.add_many(self.cfg, parts)
+            total = len(backgrounds.list_all(self.cfg))
+            self.tg.send(f"✅ Fon #{bg_id} tayyor ({seconds:.0f} soniya, {len(parts)} ta videodan). "
+                         f"Jami fon videolar: {total} ta.", chat_id)
+        except Exception as exc:
+            log.exception("merge failed")
+            self.tg.send(f"⚠️ Birlashtirib bo'lmadi: {str(exc)[:300]}", chat_id)
+        finally:
+            shutil.rmtree(self.merge_dir(), ignore_errors=True)
+
     def redo_images(self, ids: list, chat_id: int) -> None:
         """Draw a fresh cover for already-finished songs and rebuild their videos (the song is kept)."""
         done = 0
@@ -324,6 +363,9 @@ class Bot:
             return
         doc = msg.get("document") or {}
         media = msg.get("video") or msg.get("animation") or (doc if str(doc.get("mime_type", "")).startswith("video/") else None)
+        if media and self.db.kv_get("merge_mode", "0") == "1":
+            self.merge_collect(media, chat_id)
+            return
         if media:
             threading.Thread(target=self.add_background, args=(media, chat_id), daemon=True).start()
             return
@@ -337,6 +379,17 @@ class Bot:
             arg = arg.strip()
             if cmd in ("/start", "/help"):
                 self.tg.send(HELP, chat_id)
+            elif cmd == "/birlash":
+                import shutil
+                shutil.rmtree(self.merge_dir(), ignore_errors=True)
+                self.db.kv_set("merge_mode", "1")
+                self.tg.send("🎞 Birlashtirish rejimi yoqildi. Videolarni ketma-ket yuboring (\"video\" qilib), "
+                             "tugagach /tayyor deb yozing.", chat_id)
+            elif cmd == "/tayyor":
+                if self.db.kv_get("merge_mode", "0") == "1":
+                    threading.Thread(target=self.merge_finish, args=(chat_id,), daemon=True).start()
+                else:
+                    self.tg.send("Avval /birlash deb yozing, so'ng videolarni yuboring.", chat_id)
             elif cmd == "/holat":
                 self.tg.send(self.status_text(), chat_id)
             elif cmd == "/navbat":

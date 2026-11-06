@@ -40,6 +40,15 @@ def add(cfg, src: Path) -> tuple:
         return new_id, video.probe_duration(out)
 
 
+def add_many(cfg, srcs: list) -> tuple:
+    """Join several uploaded clips (in order) into one background. Returns (id, seconds)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        joined = Path(tmp) / "joined.mp4"
+        video.concat_clips([Path(x) for x in srcs], joined)
+        return add(cfg, joined)
+
+
 def remove(cfg, bg_id: int) -> bool:
     for i, path in list_all(cfg):
         if i == bg_id:

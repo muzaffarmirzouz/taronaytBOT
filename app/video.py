@@ -90,6 +90,23 @@ def make_loop(src: Path, out_path: Path, max_seconds: int = 30) -> Path:
     return out_path
 
 
+def concat_clips(srcs: list, out_path: Path) -> Path:
+    """Join several clips (any size/fps) into one 1080p/24fps clip, in the given order."""
+    if len(srcs) < 2:
+        raise ValueError("Kamida 2 ta video kerak")
+    cmd = ["ffmpeg", "-y"]
+    parts = []
+    for i, s in enumerate(srcs):
+        cmd += ["-i", str(s)]
+        parts.append(f"[{i}:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
+                     f"fps=24,format=yuv420p,setsar=1,setpts=PTS-STARTPTS[v{i}]")
+    graph = ";".join(parts) + ";" + "".join(f"[v{i}]" for i in range(len(srcs))) + f"concat=n={len(srcs)}:v=1:a=0[v]"
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    _run(cmd + ["-filter_complex", graph, "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "20", str(out_path)], timeout=600)
+    return out_path
+
+
 def beat_times(audio: Path) -> list:
     """Times (seconds) of strong bass hits, found with ffmpeg only. Empty list if anything goes wrong."""
     import re

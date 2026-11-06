@@ -266,6 +266,21 @@ bot.add_background({"file_id": "big", "file_size": 30_000_000}, 1)  # too big: r
 assert len(backgrounds.list_all(cfg)) == 2
 assert backgrounds.pick(cfg, exclude=1)[0] == 2
 
+# merge mode: two clips -> one background
+n_before = len(backgrounds.list_all(cfg))
+bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "text": "/tayyor"})  # without /birlash: nothing happens
+assert len(backgrounds.list_all(cfg)) == n_before
+bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "text": "/birlash"})
+bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "video": {"file_id": "m1", "file_size": 3_000_000}})
+bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "video": {"file_id": "m2", "file_size": 3_000_000}})
+assert len(backgrounds.list_all(cfg)) == n_before  # not stored separately
+bot.merge_finish(1)
+assert len(backgrounds.list_all(cfg)) == n_before + 1
+mid, mpath = backgrounds.list_all(cfg)[-1]
+assert video.probe_duration(mpath) > 15, video.probe_duration(mpath)  # ~2 x 10 s joined
+assert bot.db.kv_get("merge_mode") == "0"
+backgrounds.remove(cfg, mid)
+
 job_bg = db.add_job("user", raw_text="z" * 30)
 db.update(job_bg, lyrics="[Verse]\nhi", title="Samarkand Smile", style="s", yt_title="T", yt_description="d",
           yt_tags=json.dumps(["pop", "love song", "new song 2026", "lyric video", "feel good"]), mp3_path=str(LONG))
