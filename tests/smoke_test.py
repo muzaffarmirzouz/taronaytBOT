@@ -302,6 +302,23 @@ db.kv_set("post_block_until", "0")
 db.update(_jr, status="cancelled")
 bot.tg = _old_tg
 
+# export for a distributor
+_ex = []
+class _TG3:
+    def send(self, *a, **k): _ex.append(("send", a))
+    def send_document(self, path, caption="", chat_id=None): _ex.append(("doc", str(path))); return True
+_old = bot.tg; bot.tg = _TG3()
+_jx = db.add_job("user", raw_text="e" * 30)
+db.update(_jx, title="Export Song", lyrics="[Verse]\nhello", mp3_path=str(SONG), image_path=str(PNG))
+bot.export_job(_jx, 1)
+assert sum(1 for k, _ in _ex if k == "doc") == 2 and any(k == "send" and "Export Song" in str(a) for k, a in _ex), _ex
+_sq = pipe.job_dir(_jx) / "cover_3000.jpg"
+_dim = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(_sq)],
+                      capture_output=True, text=True).stdout.strip()
+assert _dim == "3000,3000", _dim
+db.update(_jx, status="cancelled")
+bot.tg = _old
+
 # collect mode: videos wait, Tayyor joins them into ONE background
 n_before = len(backgrounds.list_all(cfg))
 bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "video": {"file_id": "m1", "file_size": 3_000_000}})

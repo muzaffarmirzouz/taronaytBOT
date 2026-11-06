@@ -252,6 +252,15 @@ def make_video(image: Path, audio: Path, out_path: Path, style: str | None = Non
     return out_path
 
 
+def make_square_cover(image: Path, out_path: Path, size: int = 3000) -> Path:
+    """Square 3000x3000 JPEG cover for music distributors (centre crop of the song's cover)."""
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    _run(["ffmpeg", "-y", "-i", str(image), "-vf",
+          f"scale={size}:{size}:force_original_aspect_ratio=increase:flags=lanczos,crop={size}:{size}",
+          "-frames:v", "1", "-q:v", "2", str(out_path)], timeout=120)
+    return out_path
+
+
 def make_thumbnail(image: Path, out_path: Path, title: str = "") -> Path:
     import tempfile
     import textwrap

@@ -24,6 +24,7 @@ Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot tilni (🇺🇿 o'zbekcha / �
 
 /holat — navbat, keyingi joylash vaqti, bugungi sarf
 /navbat — oxirgi 10 ta qo'shiq
+/eksport <id> — Spotify distribyutori uchun: mp3, kvadrat muqova, matn
 /videolar — tayyor/tasdiq kutayotgan videolar ro'yxati; bosib ko'rish (katta videolar past sifatda ko'rsatiladi)
 /yarat [mavzu] — hoziroq yangi qo'shiq yaratish (mavzu ixtiyoriy)
 /joyla [id] — tasdiqlanayotgan (yoki keyingi tayyor) videoni YouTube'ga joylash
@@ -181,6 +182,33 @@ class Bot:
         head = "🎬 Tayyor videolar (bosib ko'ring)" + (" — YouTube limiti hozir yopiq, videolar saqlanadi" if blocked else "")
         icons = {"ready": "⏳", "review": "👀"}
         self.tg.send_buttons(head, [[(f"{icons[r['status']]} #{r['id']} {r['title'][:40]}", f"show:{r['id']}")] for r in rows[:20]], chat_id)
+
+    def export_job(self, job_id: int, chat_id: int) -> None:
+        """Everything a distributor (DistroKid etc.) asks for: mastered mp3, square 3000x3000 cover, title, genre, lyrics."""
+        from pathlib import Path
+        job = self.db.get(job_id)
+        if not job or not job["mp3_path"] or not Path(job["mp3_path"]).exists():
+            self.tg.send(f"#{job_id} topilmadi yoki qo'shiq fayli yo'q.", chat_id)
+            return
+        cover_src = Path(job["image_path"] or "")
+        sent_cover = False
+        if cover_src.exists():
+            try:
+                sq = self.pipeline.job_dir(job_id) / "cover_3000.jpg"
+                video.make_square_cover(cover_src, sq)
+                sent_cover = self.tg.send_document(sq, f"🖼 #{job_id} kvadrat muqova 3000×3000", chat_id)
+            except Exception:
+                log.exception("square cover failed")
+        mp3_ok = self.tg.send_document(job["mp3_path"], f"🎵 #{job_id} {job['title']} (mp3, mastering qilingan)", chat_id)
+        genre = self.db.kv_get(f"genre:{job_id}", "") or "—"
+        self.tg.send(
+            f"📦 Distribyutor uchun #{job_id}\n"
+            f"Nomi: {job['title']}\n"
+            f"Janr (taklif): {GENRES[genre][0] if genre in GENRES else genre}\n"
+            f"Til: {'o‘zbekcha' if self.db.kv_get(f'lang:{job_id}', 'en') == 'uz' else 'inglizcha'}\n"
+            f"SI ishtirokini belgilang: vokal, cholg'u, matn — SI yordamida.\n"
+            f"Fayllar: mp3 {'✅' if mp3_ok else '⚠️ yuborilmadi'} · muqova {'✅' if sent_cover else '⚠️ yuborilmadi'}\n\n"
+            f"Matn:\n{job['lyrics'][:3000]}", chat_id)
 
     def genre_rows(self, job_id: int) -> list:
         items = [(label, f"gen:{key}:{job_id}") for key, (label, _) in GENRES.items()]
@@ -551,6 +579,12 @@ class Bot:
                                  else "Fon: AI chizgan rasm 🖼", chat_id)
                 else:
                     self.tg.send("Foydalanish: /fon_rejim video  yoki  /fon_rejim rasm", chat_id)
+            elif cmd == "/eksport":
+                target = int(arg) if arg.isdigit() else None
+                if target:
+                    threading.Thread(target=self.export_job, args=(target, chat_id), daemon=True).start()
+                else:
+                    self.tg.send("Foydalanish: /eksport <id> — qo'shiq fayli, kvadrat muqova va ma'lumotni distribyutor uchun yuboradi (id ni /videolar yoki /navbat dan oling).", chat_id)
             elif cmd == "/rasm":
                 ids = [r["id"] for r in self.db.recent(200) if r["status"] == "ready"]
                 if not ids:

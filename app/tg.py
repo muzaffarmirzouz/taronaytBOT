@@ -48,6 +48,18 @@ class Telegram:
             log.warning("sendAudio failed: %s", exc)
             return False
 
+    def send_document(self, path, caption: str = "", chat_id: int | None = None) -> bool:
+        """Send a file as-is (no compression). Never raises."""
+        try:
+            with open(path, "rb") as fh:
+                resp = net.request("POST", f"{self.base}/sendDocument", retries=1, timeout=180,
+                                   data={"chat_id": chat_id or self.admin_id, "caption": caption[:1000]},
+                                   files={"document": fh})
+            return bool(resp.json().get("ok"))
+        except Exception as exc:
+            log.warning("sendDocument failed: %s", exc)
+            return False
+
     def download_file(self, file_id: str, dest) -> None:
         """Download a file the owner sent (Telegram bots can fetch up to 20 MB)."""
         info = self.call("getFile", file_id=file_id)
