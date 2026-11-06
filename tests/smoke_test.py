@@ -241,7 +241,7 @@ assert db.kv_get(f"genre:{pid}") == "club"  # a second tap changes nothing
 pipe.produce(pid)
 prompt = last_claude["body"]["messages"][0]["content"]
 assert "UZBEK" in prompt and "lyrics in UZBEK" in prompt and "NOT in English" in prompt
-assert "club dance track" in prompt and "GENRE requested" in prompt
+assert "club house" in prompt and "GENRE requested" in prompt and "CLUB STRUCTURE" in prompt
 # English choice keeps the old behaviour
 from app import claude_api as _ca  # noqa: E402
 assert "ENGLISH song" in _ca.build_user_message("some poem text here", "", [], "en")

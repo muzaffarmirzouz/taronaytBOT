@@ -65,7 +65,7 @@ def _validate(data: dict) -> dict:
     return data
 
 
-FAST_START = "short 4-bar intro, vocals start within 10 seconds"
+FAST_START = "short 4-bar intro, vocals start within 10 seconds, professional studio mix"
 
 
 def _fast_start(style: str, limit: int = 290) -> str:
@@ -84,14 +84,60 @@ def _no_intro(lyrics: str) -> str:
 
 # key -> (button label, instruction for the music style)
 GENRES = {
-    "club": ("🎧 Klub / Dance", "club dance track, four-on-the-floor EDM beat, big catchy vocal hook, 124-128 BPM, euphoric and energetic"),
-    "remix": ("🔥 Remix / EDM", "party remix style, energetic EDM dance-pop with a big bass drop, punchy synths, 126 BPM"),
-    "afro": ("🌴 Afro House", "afro house / amapiano groove, warm percussion and log-drum bass, danceable and sunny, 118-124 BPM"),
-    "pop": ("🎉 Sho'x Pop", "upbeat playful pop, bright and cheerful, handclaps, catchy chorus, 110-120 BPM"),
-    "trap": ("🎤 Hip-Hop / Trap", "trap / hip-hop with deep 808 bass and hi-hats, sung-rap vocal hook, confident and bouncy, 135-145 BPM"),
-    "ballad": ("💞 Ballada", "emotional slow ballad, piano and strings, heartfelt vocal, 70-80 BPM"),
-    "any": ("🎲 Tasodifiy sho'x", "any upbeat, energetic and danceable genre you think fits this text best"),
+    "club": ("🎧 Klub / Dance",
+             "club house / dance-pop, 124-128 BPM, four-on-the-floor punchy kick, rolling sidechained bassline, bright plucky synth stabs, "
+             "filtered build-up riser into a big euphoric drop, catchy vocal hook, wide polished club mix"),
+    "remix": ("🔥 Remix / EDM",
+              "festival EDM remix, 126-128 BPM, energetic build-up with snare roll, huge bass drop, supersaw leads, sidechain pump, "
+              "chopped vocal hook, crisp hi-hats, loud modern club master"),
+    "afro": ("🌴 Afro House",
+             "afro house / amapiano, 118-122 BPM, deep log-drum bass, shakers and congas, warm pads, smooth airy vocal chants, "
+             "hypnotic groove with an energetic percussion break, sunny and danceable, clean polished mix"),
+    "pop": ("🎉 Sho'x Pop",
+            "upbeat dance-pop, 112-120 BPM, tight bouncy drums, handclaps, bright synths and plucks, funky bass, "
+            "huge singalong chorus with stacked vocal harmonies, glossy radio-ready production"),
+    "trap": ("🎤 Hip-Hop / Trap",
+             "modern trap, 138-142 BPM, deep 808 bass, rolling hi-hats with triplets, dark bell melody, confident melodic rap-sung hook, "
+             "ad-libs, hard-hitting punchy drums, clean heavy mix"),
+    "ballad": ("💞 Ballada",
+               "cinematic emotional pop ballad, 70-76 BPM, intimate piano, warm strings, soft building drums, "
+               "expressive heartfelt vocal with a powerful final chorus, rich spacious studio mix"),
+    "any": ("🎲 Tasodifiy sho'x",
+            "any upbeat, energetic and danceable genre you think fits this text best, with modern polished studio production"),
 }
+
+# lyric-structure rules per genre: what makes the SONG sound like that genre, not just the style tag
+GENRE_LYRIC_RULES = {
+    "club": "CLUB STRUCTURE: short punchy lines (4-7 words), hypnotic repetition, a very simple chant-like hook repeated many times. "
+            "Use this order: [Verse] (4 short lines) [Pre-Chorus] (build-up, rising energy, 2-4 lines) [Chorus] (hook, repeat the key line) "
+            "[Drop] (a short line or just 'oh-oh / hey' chant, mostly instrumental) [Verse] [Pre-Chorus] [Chorus] [Drop] [Outro]. "
+            "Total length compact: about 900-1300 characters.",
+    "remix": "EDM STRUCTURE: very short lines, a big shout-along hook. Order: [Verse] (4 lines) [Build-up] (2-4 lines getting faster, "
+             "e.g. repeating one word) [Drop] (chant of 1-2 lines) [Verse] [Build-up] [Drop] [Chorus] [Drop]. Keep it around 900-1200 characters.",
+    "afro": "AFRO HOUSE STRUCTURE: relaxed rhythmic lines with call-and-response, repeated chant phrases and short hum parts "
+            "(ooh / yeah / na-na). Order: [Verse] [Chorus] [Verse] [Chorus] [Bridge] (percussion break, chant only) [Chorus]. 1000-1400 characters.",
+    "pop": "DANCE-POP STRUCTURE: [Verse] [Pre-Chorus] [Chorus] [Verse] [Pre-Chorus] [Chorus] [Bridge] [Chorus]. Playful, singable lines, "
+           "a huge repeated chorus hook. 1200-1600 characters.",
+    "trap": "TRAP STRUCTURE: rhythmic sung-rap verses with internal rhymes and ad-libs in brackets, a short melodic hook repeated. "
+            "Order: [Hook] [Verse] [Hook] [Verse] [Bridge] [Hook]. 1200-1600 characters.",
+    "ballad": "BALLAD STRUCTURE: [Verse] [Pre-Chorus] [Chorus] [Verse] [Pre-Chorus] [Chorus] [Bridge] [Final Chorus]. Vivid imagery, "
+              "slow phrasing, emotional peak in the bridge.",
+}
+
+
+def genre_key(text: str) -> str:
+    """Map a free-text genre/theme (auto songs) to one of the GENRES keys, '' if unknown."""
+    t = (text or "").lower()
+    for key, words in (("remix", ("remix", "edm", "festival", "bass drop")),
+                       ("afro", ("afro", "amapiano")),
+                       ("club", ("club", "house", "dance", "disco", "techno", "electro")),
+                       ("trap", ("trap", "hip-hop", "hip hop", "rap")),
+                       ("ballad", ("ballad", "slow")),
+                       ("pop", ("pop",))):
+        if any(w in t for w in words):
+            return key
+    return ""
+
 
 UZBEK_BRIEF = (
     "The owner chose UZBEK as the song language. Write the song in UZBEK (Latin script, natural modern Uzbek), "
@@ -129,6 +175,10 @@ def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: 
         )
     if avoid_titles:
         parts.append("Do NOT reuse or closely echo these recent titles: " + "; ".join(avoid_titles[:25]))
+    rule_key = genre if genre in GENRES else genre_key((theme or "").partition("|")[0])
+    if rule_key in GENRE_LYRIC_RULES:
+        parts.append("LYRICS FORMAT FOR THIS GENRE (overrides the generic structure above): " + GENRE_LYRIC_RULES[rule_key] +
+                     " Never add an [Intro] section.")
     if genre in GENRES and raw_text.strip():
         parts.append(
             f"GENRE requested by the owner: {GENRES[genre][1]}. The \"style\" field must clearly describe this genre "

@@ -103,6 +103,15 @@ def make_loop(src: Path, out_path: Path, max_seconds: int = 30) -> Path:
     return out_path
 
 
+def master_audio(src: Path, out_path: Path) -> Path:
+    """Light 'radio' mastering: high-pass, gentle compression, loudness to -14 LUFS (YouTube's reference level)."""
+    _run(["ffmpeg", "-y", "-i", str(src), "-af",
+          "highpass=f=25,acompressor=threshold=-18dB:ratio=2.5:attack=20:release=250:makeup=2,"
+          "loudnorm=I=-14:TP=-1.0:LRA=9",
+          "-ar", "44100", "-c:a", "libmp3lame", "-b:a", "256k", str(out_path)], timeout=600)
+    return out_path
+
+
 def make_preview(src: Path, out_path: Path, max_mb: float = 40.0) -> Path:
     """Small, low-quality copy for showing in Telegram (bots can send <=50 MB). The full-quality file is what YouTube gets."""
     dur = max(probe_duration(src), 1.0)

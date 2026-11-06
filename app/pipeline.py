@@ -117,6 +117,14 @@ class Pipeline:
             result = mureka.generate(self.cfg, job["lyrics"], job["style"])
             self._count_mureka()
             mureka.download(result["url"], mp3)
+            try:  # light mastering: even loudness, tighter low end; the untouched file is kept as song_raw.mp3
+                mastered = folder / "song_mastered.mp3"
+                video.master_audio(mp3, mastered)
+                if mastered.exists() and mastered.stat().st_size > 10_000:
+                    mp3.replace(folder / "song_raw.mp3")
+                    mastered.replace(mp3)
+            except Exception as exc:
+                log.warning("mastering skipped: %s", exc)
             self.db.update(job_id, mp3_path=str(mp3))
             job = self.db.get(job_id)
 
