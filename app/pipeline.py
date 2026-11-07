@@ -207,7 +207,7 @@ class Pipeline:
                 style = f"brand{theme}"
                 brand.render(Path(job["mp3_path"]), mp4, theme, job["title"])
             elif bg:
-                style = "wave"  # over the owner's clips there is always the same single waveform line
+                style = "clip"  # over the owner's clips nothing is drawn: no waveform, no bars
                 video.make_video(Path(job["image_path"]), Path(job["mp3_path"]), mp4, style=style,
                                  bg_video=bg, title=job["title"])
             else:

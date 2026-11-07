@@ -41,7 +41,7 @@ def fallback_image(out_path: Path, seed: int = 0) -> Path:
     return out_path
 
 
-STYLES = ("pulse", "bars", "wave")
+STYLES = ("pulse",)  # linear visualizers (bars/wave) are switched off on purpose
 FPS = 24
 
 
@@ -204,7 +204,7 @@ def make_video(image: Path, audio: Path, out_path: Path, style: str | None = Non
         tmp = Path(tmp)
         titlef = _title_filter(title, tmp) if bg_video else ""
         if bg_video:
-            style = "wave"  # one thin waveform line, nothing else
+            style = "clip"  # no visualizer at all, just the clip + title
             inputs = ["-stream_loop", "-1", "-i", str(bg_video), "-i", str(audio)]
             bg = ("[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=24,"
                   "vignette=PI/5,format=yuv420p" + ("," + titlef if titlef else ""))
@@ -237,7 +237,7 @@ def make_video(image: Path, audio: Path, out_path: Path, style: str | None = Non
                 "[w2]gblur=sigma=8[g];[g][w1]overlay=format=auto[viz];"
                 "[bg][viz]overlay=(W-w)/2:H-h-110:format=auto,format=yuv420p[v]"
             )
-        else:  # pulse / plain / none: no overlay
+        else:  # pulse / plain / clip: no overlay
             graph = bg + "[v]"
         cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", graph, "-map", "[v]", "-map", "1:a",
                "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-c:a", "aac", "-b:a", "192k",

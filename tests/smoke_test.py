@@ -194,7 +194,7 @@ for st in video.STYLES + ("plain",):
                          "-of", "csv=p=0", str(out)], capture_output=True, text=True, check=True)
     assert pr.stdout.strip() == "1920,1080", (st, pr.stdout)
 assert all(video.pick_style() in video.STYLES for _ in range(20))
-assert video.pick_style(exclude="bars") != "bars"
+assert video.pick_style(exclude="bars") == "pulse"
 old_mp3 = db.get(job_u)["mp3_path"]
 runs_before = len([c for c in calls if c[1].endswith("/v1/song/generate")])
 pipe.new_look(job_u)
@@ -391,7 +391,7 @@ pipe.produce(job_bg)
 jb = db.get(job_bg)
 assert jb["status"] == "review" and db.kv_get(f"bg:{job_bg}") in [str(i) for i, _ in backgrounds.list_all(cfg)]
 assert len([c for c in calls if "api.openai.com" in c[1]]) == openai_before  # no paid image
-assert db.kv_get(f"style:{job_bg}") == "wave"
+assert db.kv_get(f"style:{job_bg}") == "clip"
 dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
                             "default=nw=1:nk=1", jb["mp4_path"]], capture_output=True, text=True, check=True).stdout)
 assert 24 < dur < 26, dur  # 9 s clip repeated until the 25 s song ends
