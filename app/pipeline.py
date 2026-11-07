@@ -185,7 +185,7 @@ class Pipeline:
         if needs_video:
             prev = self.db.kv_get(f"style:{job_id}", "")
             if bg:
-                style = style if style in ("bars", "wave") else video.pick_style(exclude=prev, allowed=("bars", "wave"))
+                style = "wave"  # over the owner's clips there is always the same single waveform line
                 video.make_video(Path(job["image_path"]), Path(job["mp3_path"]), mp4, style=style,
                                  bg_video=bg, title=job["title"])
             else:

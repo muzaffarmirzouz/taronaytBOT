@@ -390,7 +390,7 @@ pipe.produce(job_bg)
 jb = db.get(job_bg)
 assert jb["status"] == "review" and db.kv_get(f"bg:{job_bg}") in [str(i) for i, _ in backgrounds.list_all(cfg)]
 assert len([c for c in calls if "api.openai.com" in c[1]]) == openai_before  # no paid image
-assert db.kv_get(f"style:{job_bg}") in ("bars", "wave")
+assert db.kv_get(f"style:{job_bg}") == "wave"
 dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
                             "default=nw=1:nk=1", jb["mp4_path"]], capture_output=True, text=True, check=True).stdout)
 assert 24 < dur < 26, dur  # 9 s clip repeated until the 25 s song ends

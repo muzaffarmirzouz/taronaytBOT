@@ -204,7 +204,7 @@ def make_video(image: Path, audio: Path, out_path: Path, style: str | None = Non
         tmp = Path(tmp)
         titlef = _title_filter(title, tmp) if bg_video else ""
         if bg_video:
-            style = style if style in ("bars", "wave") else "none"
+            style = "wave"  # one thin waveform line, nothing else
             inputs = ["-stream_loop", "-1", "-i", str(bg_video), "-i", str(audio)]
             bg = ("[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=24,"
                   "vignette=PI/5,format=yuv420p" + ("," + titlef if titlef else ""))
@@ -229,13 +229,13 @@ def make_video(image: Path, audio: Path, out_path: Path, style: str | None = Non
                 "[b1][glow]overlay=format=auto,colorchannelmixer=aa=0.9[viz];"
                 "[bg][viz]overlay=0:H-h-40:format=auto,format=yuv420p[v]"
             )
-        elif style == "wave":
+        elif style == "wave":  # ONE clean glowing waveform line near the bottom
             graph = (
                 bg + "[bg];"
-                "[1:a]showwaves=s=1600x160:mode=cline:rate=24:colors=0xffffff:scale=sqrt,"
-                "format=rgba,colorkey=0x000000:0.1:0.1,split[w1][w2];[w2]gblur=sigma=10[g];"
-                "[w1][g]overlay=format=auto[viz];"
-                "[bg][viz]overlay=(W-w)/2:H-h-120:format=auto,format=yuv420p[v]"
+                "[1:a]showwaves=s=1700x180:mode=p2p:rate=24:colors=0xffffff:scale=lin,"
+                "format=gray,dilation,dilation,dilation,format=rgba,colorkey=0x000000:0.05:0.0,split[w1][w2];"
+                "[w2]gblur=sigma=8[g];[g][w1]overlay=format=auto[viz];"
+                "[bg][viz]overlay=(W-w)/2:H-h-110:format=auto,format=yuv420p[v]"
             )
         else:  # pulse / plain / none: no overlay
             graph = bg + "[v]"
