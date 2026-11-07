@@ -83,6 +83,12 @@ class Pipeline:
         """One of the owner's looping clips (different from last time for this song), or None."""
         if self.db.kv_get("bg_mode", "video") != "video":
             return None
+        forced = self.db.kv_get(f"bgforce:{job_id}", "")
+        if forced.isdigit():  # the owner chose this clip for this song
+            for bg_id, path in backgrounds.list_all(self.cfg):
+                if bg_id == int(forced):
+                    self.db.kv_set(f"bg:{job_id}", forced)
+                    return path
         prev = self.db.kv_get(f"bg:{job_id}", "")
         pick = backgrounds.pick(self.cfg, exclude=int(prev) if prev.isdigit() else None)
         if not pick:
@@ -177,8 +183,10 @@ class Pipeline:
         self.db.update(job_id, status="review" if job["source"] == "user" else "ready")
         log.info("job %s finished: %s", job_id, job["title"])
 
-    def new_look(self, job_id: int) -> None:
-        """Owner asked for "another version": fresh cover and a different visual style, same song."""
+    def new_look(self, job_id: int, bg_id: int | None = None) -> None:
+        """Owner asked for "another version": fresh cover and a different visual style, same song.
+        With bg_id the owner picked that background clip; otherwise a different one is drawn."""
+        self.db.kv_set(f"bgforce:{job_id}", str(bg_id) if bg_id else "")
         job = self.db.get(job_id)
         base = (job["image_prompt"] or "").split(" [variation")[0]
         n = int(self.db.kv_get(f"variation:{job_id}", "0")) + 1

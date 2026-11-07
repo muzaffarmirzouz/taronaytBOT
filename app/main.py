@@ -165,8 +165,8 @@ class Bot:
         job = self.db.get(job_id)
         caption = (f"🎬 #{job_id} {job['title']}\n{job['yt_title']}\n\n"
                    f"Yoqdimi? YouTube'ga joylaymi?")
-        buttons = [("✅ Joylash", f"post:{job_id}"), ("🔄 Boshqa qil", f"redo:{job_id}"),
-                   ("❌ Bekor", f"del:{job_id}")]
+        buttons = [[("✅ Joylash", f"post:{job_id}"), ("🔄 Boshqa qil", f"redo:{job_id}"), ("❌ Bekor", f"del:{job_id}")],
+                   [("🎞 Fon tanlash", f"bgs:{job_id}")]]
         if not self.show_video(job, caption, buttons):
             # video too big / upload failed: fall back to audio + text commands
             self.tg.send_audio(job["mp3_path"], title=job["title"], caption=caption)
@@ -238,16 +238,17 @@ class Bot:
             if not self.post_job(job_id) and self.post_busy:
                 self.tg.send("Boshqa joylash davom etyapti, birozdan keyin qayta urining.", chat_id)
 
-    def do_redo(self, job_id: int, chat_id: int) -> None:
+    def do_redo(self, job_id: int, chat_id: int, bg_id: int | None = None) -> None:
         job = self.db.get(job_id)
         if not job or job["status"] not in ("review", "ready"):
             self.tg.send(f"#{job_id} ni boshqacha qilib bo'lmaydi.", chat_id)
             return
         back = job["status"]
-        self.tg.send(f"🔄 #{job_id}: yangi rasm va uslub bilan qayta yig'ilmoqda (1–3 daqiqa)...", chat_id)
+        self.tg.send(f"🔄 #{job_id}: " + (f"fon #{bg_id} bilan" if bg_id else "yangi rasm va uslub bilan")
+                     + " qayta yig'ilmoqda (1–3 daqiqa)...", chat_id)
         with self.produce_lock:
             try:
-                self.pipeline.new_look(job_id)
+                self.pipeline.new_look(job_id, bg_id)
             except Exception as exc:
                 log.exception("redo failed")
                 self.db.update(job_id, status=back)
@@ -274,6 +275,36 @@ class Bot:
             target = self.merge_finish if data == "mg:done" else self.merge_cancel
             threading.Thread(target=target, args=(chat_id,), daemon=True).start()
             return
+        if data.startswith("bgs:") or data.startswith("bgp:"):
+            parts = data.split(":")
+            job = self.db.get(int(parts[1])) if len(parts) > 1 and parts[1].isdigit() else None
+            if not job or job["status"] not in ("review", "ready"):
+                self.tg.answer_callback(cb["id"], "Bu videoni endi o'zgartirib bo'lmaydi.")
+                return
+            items = backgrounds.list_all(self.cfg)
+            if parts[0] == "bgs":
+                self.tg.answer_callback(cb["id"], "Fonlar")
+                if not items:
+                    self.tg.send("Fon video yo'q. Avval videolarni yuboring va ✅ Tayyor ni bosing.", chat_id)
+                    return
+                now = self.db.kv_get(f"bg:{job['id']}", "")
+                rows, row = [], []
+                for i, _ in items:
+                    row.append((("✔ " if str(i) == now else "") + f"🎞 #{i}", f"bgp:{job['id']}:{i}"))
+                    if len(row) == 4:
+                        rows.append(row); row = []
+                if row:
+                    rows.append(row)
+                rows.append([("🎲 Tasodifiy", f"bgp:{job['id']}:0")])
+                self.tg.send_buttons(f"🎞 #{job['id']} uchun qaysi fon? (hozirgi: #{now or '—'})", rows, chat_id)
+                return
+            bg_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+            if bg_id and bg_id not in dict(items):
+                self.tg.answer_callback(cb["id"], "Bu fon topilmadi.")
+                return
+            self.tg.answer_callback(cb["id"], "Qayta yig'ilmoqda...")
+            threading.Thread(target=self.do_redo, args=(job["id"], chat_id, bg_id or None), daemon=True).start()
+            return
         if data.startswith("show:"):
             raw = data.split(":")[1]
             job = self.db.get(int(raw)) if raw.isdigit() else None
@@ -283,7 +314,8 @@ class Bot:
             self.tg.answer_callback(cb["id"], "Yuborilmoqda...")
             jid = job["id"]
             btns = [] if job["status"] == "posted" else [
-                ("✅ Joylash", f"post:{jid}"), ("🔄 Boshqa qil", f"redo:{jid}"), ("❌ Bekor", f"del:{jid}")]
+                [("✅ Joylash", f"post:{jid}"), ("🔄 Boshqa qil", f"redo:{jid}"), ("❌ Bekor", f"del:{jid}")],
+                [("🎞 Fon tanlash", f"bgs:{jid}")]]
             threading.Thread(target=lambda: self.show_video(job, f"🎬 #{jid} {job['title']}\n{job['yt_title']}", btns, chat_id)
                              or self.tg.send("Videoni yuborib bo'lmadi.", chat_id), daemon=True).start()
             return

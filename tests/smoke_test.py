@@ -218,7 +218,7 @@ bot.tg = _TG2()
 bot.cfg = cfg
 bot.publish_lock = _th.Lock()
 bot.send_review(job_u)
-assert vids and [b[1] for b in vids[0][1]] == [f"post:{job_u}", f"redo:{job_u}", f"del:{job_u}"]
+assert vids and [b[1] for b in vids[0][1][0]] == [f"post:{job_u}", f"redo:{job_u}", f"del:{job_u}"] and vids[0][1][1][0][1] == f"bgs:{job_u}"
 assert bot.latest_review() == job_u
 bot.do_post(job_u, 1)
 assert db.get(job_u)["status"] == "posted", db.get(job_u)["status"]
@@ -363,6 +363,22 @@ assert 24 < dur < 26, dur  # 9 s clip repeated until the 25 s song ends
 first_bg = db.kv_get(f"bg:{job_bg}")
 pipe.new_look(job_bg)
 assert db.get(job_bg)["status"] == "review" and db.kv_get(f"bg:{job_bg}") != first_bg  # another clip next time
+# the owner can pick the background clip himself
+_ids = [i for i, _ in backgrounds.list_all(cfg)]
+_target = next(i for i in _ids if str(i) != db.kv_get(f"bg:{job_bg}"))
+_sent = []
+_old_b = bot.tg
+class _TG4:
+    def send(self, *a, **k): _sent.append(("send", a))
+    def send_buttons(self, text, rows, chat_id=None): _sent.append(("buttons", text, rows))
+    def send_video(self, *a, **k): _sent.append(("video", a)); return True
+    def answer_callback(self, *a, **k): pass
+bot.tg = _TG4()
+bot.handle_callback({"id": "b1", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": f"bgs:{job_bg}"})
+assert any(c[0] == "buttons" and f"bgp:{job_bg}:{_target}" in str(c[2]) for c in _sent), _sent
+bot.do_redo(job_bg, 1, _target)
+assert db.kv_get(f"bg:{job_bg}") == str(_target) and db.get(job_bg)["status"] == "review"
+bot.tg = _old_b
 pipe.publish(job_bg)  # thumbnail with the title is rendered inside publish
 assert (pipe.job_dir(job_bg) / "thumb.jpg").exists()
 db.kv_set("bg_mode", "rasm")

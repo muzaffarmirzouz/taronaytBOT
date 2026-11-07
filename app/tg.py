@@ -85,7 +85,9 @@ class Telegram:
         try:
             data = {"chat_id": chat_id or self.admin_id, "caption": caption[:1000], "supports_streaming": "true"}
             if buttons:
-                data["reply_markup"] = _json.dumps({"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in buttons]]})
+                rows = buttons if isinstance(buttons[0], list) else [buttons]  # one row, or a list of rows
+                data["reply_markup"] = _json.dumps(
+                    {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in rows]})
             with open(path, "rb") as fh:
                 resp = net.request("POST", f"{self.base}/sendVideo", retries=1, timeout=300,
                                    data=data, files={"video": fh})
