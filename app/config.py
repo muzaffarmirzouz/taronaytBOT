@@ -45,6 +45,7 @@ class Config:
     post_times: list
     stock_target: int
     max_mureka_per_day: int
+    auto_turkish_percent: int
     data_dir: Path
     channel_footer: str
 
@@ -74,6 +75,7 @@ class Config:
             post_times=times,
             stock_target=_int("STOCK_TARGET", max(2 * len(times), 3)),
             max_mureka_per_day=_int("MAX_MUREKA_PER_DAY", 12),
+            auto_turkish_percent=max(0, min(100, _int("AUTO_TURKISH_PERCENT", 30))),
             data_dir=Path(_env("DATA_DIR", "./data")),
             channel_footer=_env("CHANNEL_FOOTER", ""),
         )

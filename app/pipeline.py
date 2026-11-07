@@ -77,7 +77,11 @@ class Pipeline:
         return random.choice(options)
 
     def add_auto_job(self, theme: str = "") -> int:
-        return self.db.add_job("auto", theme=theme or self.pick_idea())
+        job_id = self.db.add_job("auto", theme=theme or self.pick_idea())
+        # a share of the automatic songs is sung in Turkish (AUTO_TURKISH_PERCENT, default 30)
+        if random.randint(1, 100) <= self.cfg.auto_turkish_percent:
+            self.db.kv_set(f"lang:{job_id}", "tr")
+        return job_id
 
     def _pick_background(self, job_id: int):
         """One of the owner's looping clips (different from last time for this song), or None."""

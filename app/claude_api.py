@@ -220,6 +220,14 @@ def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: 
             f"Genre/vibe: {genre.strip() or 'your choice'}\n"
             f"Topic: {topic.strip() or genre.strip() or 'your choice'}"
         )
+        if language == "tr":
+            parts.append(
+                "Write this song in natural, modern, singable TURKISH (correct letters ç ğ ı ö ş ü), NOT in English. "
+                "\"title\" is a short Turkish title; \"lyrics\" are Turkish; \"style\" stays in English and MUST include "
+                "'Turkish-language vocals'; \"image_prompt\" stays in English; \"yt_title\" like '<Turkish Title> | Turkish "
+                "<Genre> Song'; \"yt_description\" starts with 1-2 English paragraphs (it is a Turkish-language song, one "
+                "English sentence on what it says), then 'Lyrics:' and the Turkish lyrics; \"yt_tags\" stay English and "
+                "include 'turkish song', 'turkish music', 'türkçe şarkı'.")
     if avoid_titles:
         parts.append("Do NOT reuse or closely echo these recent titles: " + "; ".join(avoid_titles[:25]))
     rule_key = genre if genre in GENRES else genre_key((theme or "").partition("|")[0])

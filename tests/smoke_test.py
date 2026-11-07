@@ -252,6 +252,15 @@ assert "male lead vocal" in db.get(pid)["style"] and "female" not in db.get(pid)
 from app import claude_api as _ca  # noqa: E402
 _tr = _ca.build_user_message("Qulab ketar ko'ksimga to'g'lar, darding olay", "", [], "tr")
 assert "TURKISH" in _tr and "NOT in English" in _tr and "lyrics in TURKISH" in _tr and "Turkish-language vocals" in _tr
+_tr_auto = _ca.build_user_message("", "club | night city", [], "tr")
+assert "TURKISH" in _tr_auto and "Turkish-language vocals" in _tr_auto and "brand-new original song" in _tr_auto
+cfg.auto_turkish_percent = 100
+_aj = pipe.add_auto_job("pop | sunny day")
+assert db.kv_get(f"lang:{_aj}") == "tr"
+cfg.auto_turkish_percent = 0
+_aj2 = pipe.add_auto_job("pop | rainy day")
+assert db.kv_get(f"lang:{_aj2}", "") == ""
+db.update(_aj, status="failed"); db.update(_aj2, status="failed")
 # English choice keeps the old behaviour
 from app import claude_api as _ca  # noqa: E402
 assert "ENGLISH song" in _ca.build_user_message("some poem text here", "", [], "en")
