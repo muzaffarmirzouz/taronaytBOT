@@ -319,6 +319,15 @@ assert _dim == "3000,3000", _dim
 db.update(_jx, status="cancelled")
 bot.tg = _old
 
+# rotation: every clip gets a turn; a new clip goes first
+_seen = []
+for _ in range(len(backgrounds.list_all(cfg))):
+    _seen.append(backgrounds.pick(cfg)[0])
+assert sorted(_seen) == sorted(i for i, _ in backgrounds.list_all(cfg)), _seen
+_new_id, _ = backgrounds.add(cfg, CLIP)
+assert backgrounds.pick(cfg)[0] == _new_id
+backgrounds.remove(cfg, _new_id)
+
 # collect mode: videos wait, Tayyor joins them into ONE background
 n_before = len(backgrounds.list_all(cfg))
 bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "video": {"file_id": "m1", "file_size": 3_000_000}})

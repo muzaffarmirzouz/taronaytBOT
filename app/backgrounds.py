@@ -1,8 +1,10 @@
 """The owner's library of short looping background clips (made in Flow etc.)."""
 from __future__ import annotations
 
+import os
 import random
 import re
+import time
 import threading
 from pathlib import Path
 
@@ -37,6 +39,7 @@ def add(cfg, src: Path) -> tuple:
         except Exception:
             out.unlink(missing_ok=True)
             raise
+        os.utime(out, (0, 0))  # never used yet: the next song picks it first
         return new_id, video.probe_duration(out)
 
 
@@ -58,9 +61,17 @@ def remove(cfg, bg_id: int) -> bool:
 
 
 def pick(cfg, exclude: int | None = None):
-    """Random background (id, path), avoiding `exclude` when there is a choice. None if the library is empty."""
+    """Next background (id, path): the least recently used one, so every clip gets its turn and a
+    newly added clip is used first. `exclude` is avoided when there is a choice. None if empty.
+    Last use is kept in each file's modification time."""
     items = list_all(cfg)
     if not items:
         return None
     options = [x for x in items if x[0] != exclude] or items
-    return random.choice(options)
+    oldest = min(x[1].stat().st_mtime for x in options)
+    choice = random.choice([x for x in options if x[1].stat().st_mtime <= oldest + 1e-6])
+    try:
+        os.utime(choice[1], (time.time(), time.time()))
+    except OSError:
+        pass
+    return choice
