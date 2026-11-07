@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from . import backgrounds, scheduler, video
+from . import backgrounds, brand, scheduler, video
 from .config import Config
 from .claude_api import GENRES, VOICES
 from .db import DB, STOCK_STATUSES
@@ -239,13 +239,13 @@ class Bot:
             if not self.post_job(job_id) and self.post_busy:
                 self.tg.send("Boshqa joylash davom etyapti, birozdan keyin qayta urining.", chat_id)
 
-    def do_redo(self, job_id: int, chat_id: int, bg_id: int | None = None) -> None:
+    def do_redo(self, job_id: int, chat_id: int, bg_id=None) -> None:
         job = self.db.get(job_id)
         if not job or job["status"] not in ("review", "ready"):
             self.tg.send(f"#{job_id} ni boshqacha qilib bo'lmaydi.", chat_id)
             return
         back = job["status"]
-        self.tg.send(f"🔄 #{job_id}: " + (f"fon #{bg_id} bilan" if bg_id else "yangi rasm va uslub bilan")
+        self.tg.send(f"🔄 #{job_id}: " + ((f"🎨 {bg_id[1:]}-fon bilan" if str(bg_id).startswith("b") else f"fon #{bg_id} bilan") if bg_id else "yangi fon va uslub bilan")
                      + " qayta yig'ilmoqda (1–3 daqiqa)...", chat_id)
         with self.produce_lock:
             try:
@@ -285,23 +285,35 @@ class Bot:
             items = backgrounds.list_all(self.cfg)
             if parts[0] == "bgs":
                 self.tg.answer_callback(cb["id"], "Fonlar")
-                if not items:
-                    self.tg.send("Fon video yo'q. Avval videolarni yuboring va ✅ Tayyor ni bosing.", chat_id)
-                    return
                 now = self.db.kv_get(f"bg:{job['id']}", "")
                 rows, row = [], []
-                for i, _ in items:
+                for n in range(1, brand.THEME_COUNT + 1):  # logo + circular spectrum on animated themes
+                    row.append((("✔ " if now == f"b{n}" else "") + f"🎨 {n}", f"bgp:{job['id']}:b{n}"))
+                    if len(row) == 4:
+                        rows.append(row); row = []
+                if row:
+                    rows.append(row)
+                row = []
+                for i, _ in items:  # the owner's own looping clips
                     row.append((("✔ " if str(i) == now else "") + f"🎞 #{i}", f"bgp:{job['id']}:{i}"))
                     if len(row) == 4:
                         rows.append(row); row = []
                 if row:
                     rows.append(row)
                 rows.append([("🎲 Tasodifiy", f"bgp:{job['id']}:0")])
-                self.tg.send_buttons(f"🎞 #{job['id']} uchun qaysi fon? (hozirgi: #{now or '—'})", rows, chat_id)
+                shown = brand.THEME_NAMES[int(now[1:]) - 1] if now.startswith("b") and now[1:].isdigit() else (f"klip #{now}" if now else "—")
+                self.tg.send_buttons(f"🎨 #{job['id']} uchun qaysi fon? 🎨 = logo + doira spektr, 🎞 = sizning klipingiz (hozirgi: {shown})", rows, chat_id)
                 return
-            bg_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
-            if bg_id and bg_id not in dict(items):
-                self.tg.answer_callback(cb["id"], "Bu fon topilmadi.")
+            token = parts[2] if len(parts) > 2 else "0"
+            if token.startswith("b") and token[1:].isdigit() and 1 <= int(token[1:]) <= brand.THEME_COUNT:
+                bg_id = token
+            elif token.isdigit():
+                bg_id = int(token) or None
+                if bg_id and bg_id not in dict(items):
+                    self.tg.answer_callback(cb["id"], "Bu fon topilmadi.")
+                    return
+            else:
+                self.tg.answer_callback(cb["id"], "Noma'lum fon.")
                 return
             self.tg.answer_callback(cb["id"], "Qayta yig'ilmoqda...")
             threading.Thread(target=self.do_redo, args=(job["id"], chat_id, bg_id or None), daemon=True).start()
@@ -401,7 +413,7 @@ class Bot:
             f"Tayyor video: {db.count('ready')}\n"
             f"Tasdiq kutayotgan (sizniki): {db.count('review')}\n"
             f"Til tanlashni kutayotgan: {db.count('pending')}\n"
-            f"Fon videolar: {len(backgrounds.list_all(self.cfg))} ta (rejim: {db.kv_get('bg_mode', 'video')})\n"
+            f"Fon videolar: {len(backgrounds.list_all(self.cfg))} ta (rejim: {db.kv_get('bg_mode', 'brand')})\n"
             f"Tayyorlanmoqda/navbatda: {db.count('queued', 'producing')}\n"
             f"Joylangan: {db.count('posted')} · Xato: {db.count('failed')}\n"
             f"Keyingi joylash: {nxt.strftime('%Y-%m-%d %H:%M')} ({self.cfg.timezone})\n"
@@ -633,7 +645,7 @@ class Bot:
                     self.tg.send("Foydalanish: /bekor <id>", chat_id)
             elif cmd == "/fonlar":
                 items = backgrounds.list_all(self.cfg)
-                mode = self.db.kv_get("bg_mode", "video")
+                mode = self.db.kv_get("bg_mode", "brand")
                 if not items:
                     self.tg.send("Fon video yo'q. 10–15 soniyalik videolarni shu yerga yuboring.", chat_id)
                 else:
@@ -644,12 +656,15 @@ class Bot:
                 ok = arg.isdigit() and backgrounds.remove(self.cfg, int(arg))
                 self.tg.send(f"🗑 Fon #{arg} o'chirildi." if ok else "Topilmadi. Foydalanish: /fon_ochir <id>", chat_id)
             elif cmd == "/fon_rejim":
-                if arg in ("video", "rasm"):
+                names = {"brand": "Fon: logo + doira spektr, 11 xil animatsion fon 🎨",
+                         "video": "Fon: faqat sizning klip videolaringiz 🎞 (ustida bitta chiziq)",
+                         "aralash": "Fon: logo-spektr va sizning kliplaringiz tasodifiy aralash 🎲",
+                         "rasm": "Fon: AI chizgan rasm 🖼"}
+                if arg in names:
                     self.db.kv_set("bg_mode", arg)
-                    self.tg.send("Fon: sizning videolaringiz 🎞" if arg == "video"
-                                 else "Fon: AI chizgan rasm 🖼", chat_id)
+                    self.tg.send(names[arg], chat_id)
                 else:
-                    self.tg.send("Foydalanish: /fon_rejim video  yoki  /fon_rejim rasm", chat_id)
+                    self.tg.send("Foydalanish: /fon_rejim brand (logo + doira, 11 fon) | video (klipingiz) | aralash | rasm", chat_id)
             elif cmd == "/eksport":
                 target = int(arg) if arg.isdigit() else None
                 if target:

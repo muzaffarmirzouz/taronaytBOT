@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import backgrounds, claude_api, images, mureka, video, youtube
+from . import backgrounds, brand, claude_api, images, mureka, video, youtube
 
 log = logging.getLogger("pipeline")
 
@@ -83,22 +83,34 @@ class Pipeline:
             self.db.kv_set(f"lang:{job_id}", "tr")
         return job_id
 
-    def _pick_background(self, job_id: int):
-        """One of the owner's looping clips (different from last time for this song), or None."""
-        if self.db.kv_get("bg_mode", "video") != "video":
-            return None
+    def _choose_look(self, job_id: int):
+        """Background for this song: ("brand", n) = logo + circular spectrum on animated theme n (1-11),
+        ("clip", path) = one of the owner's looping clips, or None = an AI picture (OpenAI)."""
+        mode = self.db.kv_get("bg_mode", "brand")
         forced = self.db.kv_get(f"bgforce:{job_id}", "")
+        prev = self.db.kv_get(f"bg:{job_id}", "")
+        clips = backgrounds.list_all(self.cfg)
+        if forced.startswith("b") and forced[1:].isdigit() and 1 <= int(forced[1:]) <= brand.THEME_COUNT:
+            self.db.kv_set(f"bg:{job_id}", forced)
+            return ("brand", int(forced[1:]))
         if forced.isdigit():  # the owner chose this clip for this song
-            for bg_id, path in backgrounds.list_all(self.cfg):
+            for bg_id, path in clips:
                 if bg_id == int(forced):
                     self.db.kv_set(f"bg:{job_id}", forced)
-                    return path
-        prev = self.db.kv_get(f"bg:{job_id}", "")
+                    return ("clip", path)
+        if mode == "rasm":
+            return None
+        use_brand = mode == "brand" or (mode == "aralash" and (not clips or random.random() < 0.5))
+        if use_brand:
+            options = [n for n in range(1, brand.THEME_COUNT + 1) if f"b{n}" != prev]
+            n = random.choice(options)
+            self.db.kv_set(f"bg:{job_id}", f"b{n}")
+            return ("brand", n)
         pick = backgrounds.pick(self.cfg, exclude=int(prev) if prev.isdigit() else None)
         if not pick:
             return None
         self.db.kv_set(f"bg:{job_id}", str(pick[0]))
-        return pick[1]
+        return ("clip", pick[1])
 
     # --- produce --------------------------------------------------------
     def _voice_for(self, job_id: int) -> str:
@@ -162,12 +174,16 @@ class Pipeline:
         mp4 = folder / "video.mp4"
         needs_image = not (job["image_path"] and Path(job["image_path"]).exists())
         needs_video = not (job["mp4_path"] and Path(job["mp4_path"]).exists())
-        bg = self._pick_background(job_id) if (needs_image or needs_video) else None
-        if (needs_image or needs_video) and not bg:
+        look = self._choose_look(job_id) if (needs_image or needs_video) else None
+        bg = look[1] if look and look[0] == "clip" else None
+        theme = look[1] if look and look[0] == "brand" else None
+        if (needs_image or needs_video) and not look:
             self.db.kv_set(f"bg:{job_id}", "")
 
         if needs_image:
-            if bg:
+            if theme:
+                brand.cover_frame(image, theme, "")  # thumbnail source: logo + spectrum on the theme
+            elif bg:
                 video.frame_from(bg, image)  # thumbnail source; no image-generation cost
             else:
                 try:
@@ -184,7 +200,10 @@ class Pipeline:
 
         if needs_video:
             prev = self.db.kv_get(f"style:{job_id}", "")
-            if bg:
+            if theme:
+                style = f"brand{theme}"
+                brand.render(Path(job["mp3_path"]), mp4, theme, job["title"])
+            elif bg:
                 style = "wave"  # over the owner's clips there is always the same single waveform line
                 video.make_video(Path(job["image_path"]), Path(job["mp3_path"]), mp4, style=style,
                                  bg_video=bg, title=job["title"])
@@ -198,7 +217,7 @@ class Pipeline:
         self.db.update(job_id, status="review" if job["source"] == "user" else "ready")
         log.info("job %s finished: %s", job_id, job["title"])
 
-    def new_look(self, job_id: int, bg_id: int | None = None) -> None:
+    def new_look(self, job_id: int, bg_id=None) -> None:
         """Owner asked for "another version": fresh cover and a different visual style, same song.
         With bg_id the owner picked that background clip; otherwise a different one is drawn."""
         self.db.kv_set(f"bgforce:{job_id}", str(bg_id) if bg_id else "")

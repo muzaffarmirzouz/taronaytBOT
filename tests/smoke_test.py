@@ -108,6 +108,7 @@ cfg = Config.from_env()
 assert cfg.missing() == [], cfg.missing()
 
 db = DB(cfg.data_dir / "bot.sqlite3")
+db.kv_set("bg_mode", "video")  # the older tests below are about clips / pictures; brand mode has its own block
 sent = []
 pipe = Pipeline(cfg, db, sent.append)
 
@@ -421,6 +422,30 @@ db.update(job_img, lyrics="[Verse]\nhi", title="T2", style="s", image_prompt="a 
           yt_tags="[]", mp3_path=str(SONG))
 pipe.produce(job_img)
 assert len([c for c in calls if "api.openai.com" in c[1]]) == openai_before + 1  # picture mode draws a cover again
+db.kv_set("bg_mode", "video")
+
+# brand mode: logo + circular spectrum on one of 11 themes, no paid picture
+db.kv_set("bg_mode", "brand")
+from app import brand as _brand  # noqa: E402
+job_br = db.add_job("user", raw_text="b" * 30)
+db.update(job_br, lyrics="[Verse]\nhi", title="Brand Song", style="s", yt_title="T", yt_description="d",
+          yt_tags=json.dumps(["pop", "love song", "new song 2026", "lyric video", "feel good"]), mp3_path=str(SONG))
+openai_n = len([c for c in calls if "api.openai.com" in c[1]])
+_orig_render, _orig_cover = _brand.render, _brand.cover_frame
+_brand.render = lambda audio, out, theme, title="", **k: _orig_render(audio, out, theme, title, size=(640, 360), max_seconds=3)
+_brand.cover_frame = lambda out, theme, title="", **k: _orig_cover(out, theme, title, size=(640, 360))
+pipe.produce(job_br)
+assert db.get(job_br)["status"] == "review" and db.kv_get(f"style:{job_br}").startswith("brand")
+assert db.kv_get(f"bg:{job_br}").startswith("b") and len([c for c in calls if "api.openai.com" in c[1]]) == openai_n
+first_theme = db.kv_get(f"bg:{job_br}")
+pipe.new_look(job_br)
+assert db.kv_get(f"bg:{job_br}") != first_theme  # another theme
+pipe.new_look(job_br, "b5")
+assert db.kv_get(f"bg:{job_br}") == "b5" and db.kv_get(f"style:{job_br}") == "brand5"
+for _n in range(1, _brand.THEME_COUNT + 1):  # every theme renders a still without errors
+    _orig_cover(TMP / f"theme_{_n}.png", _n, "T", size=(320, 180))
+_brand.render, _brand.cover_frame = _orig_render, _orig_cover
+db.update(job_br, status="failed")
 db.kv_set("bg_mode", "video")
 
 # 4) queue priority: user jobs first

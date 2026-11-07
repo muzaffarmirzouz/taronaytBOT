@@ -1,2 +1,4 @@
 requests>=2.31
 tzdata
+numpy>=1.26
+Pillow>=10.0
