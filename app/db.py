@@ -104,6 +104,17 @@ class DB:
             ).fetchone()
             return dict(row) if row else None
 
+    def next_postable(self):
+        """What the scheduler posts: anything listed in /videolar. The owner's own videos first (ready, or still waiting
+        for his yes/no), then automatic ones."""
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT * FROM jobs WHERE mp4_path IS NOT NULL AND mp4_path != '' AND "
+                "(status='ready' OR (status='review' AND source='user')) "
+                "ORDER BY (source='user') DESC, id ASC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else None
+
     def count(self, *statuses: str) -> int:
         if not statuses:
             return 0

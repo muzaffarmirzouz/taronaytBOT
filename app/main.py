@@ -133,8 +133,12 @@ class Bot:
             return
         if time.time() < float(self.db.kv_get("post_block_until", "0") or 0):
             return
-        job = self.db.next_ready()
+        job = self.db.next_postable()
         if not job:
+            # nothing in /videolar: make one right now (the worker takes it from here)
+            if not self.db.count("queued", "producing") and self.pipeline.mureka_used_today() < self.cfg.max_mureka_per_day:
+                self.pipeline.add_auto_job()
+                self.wake.set()
             if self.db.kv_get("no_video_notified") != key:
                 self.db.kv_set("no_video_notified", key)
                 self.tg.send(f"⏳ {key} uchun tayyor video yo'q. Tayyor bo'lishi bilan joylanadi (3 soat ichida).")
