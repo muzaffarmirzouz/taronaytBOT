@@ -251,3 +251,51 @@ def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | 
             last_err = exc
             log.warning("Claude reply invalid (attempt %s): %s", attempt + 1, exc)
     raise RuntimeError(f"Claude returned invalid JSON 3 times: {last_err}")
+
+
+META_SCHEMA = """Return a JSON object with exactly these keys:
+- "title": song title, max 45 characters. If the owner gave a title use it exactly.
+- "image_prompt": vivid prompt for a 3:2 landscape illustration matching the song's mood/theme (no text, letters, logos,
+  watermarks, no real people or celebrities).
+- "yt_title": YouTube title, max 90 characters, like "<Song Title> | <Genre/Mood> Song". Natural, no clickbait lies.
+- "yt_description": 2 short paragraphs about the feel of the song and who it is for. If the owner pasted lyrics, add a line
+  "Lyrics:" followed by them. Max 3000 characters in total.
+- "yt_tags": array of 12-18 search-friendly English tags, each at most 30 characters."""
+
+
+def make_meta(cfg, hint: str = "", title: str = "", avoid_titles: list | None = None) -> dict:
+    """Metadata for a FINISHED track the owner uploaded (Claude cannot hear it, so it works from the owner's notes)."""
+    parts = ["The owner uploaded a finished song (audio). You cannot hear it; write the YouTube metadata from the notes below. "
+             "Do not invent facts about the singer or claim specific lyrics unless pasted."]
+    if title:
+        parts.append(f"Song title given by the owner: {title}")
+    parts.append("Owner's notes (genre / mood / story / lyrics, any language): " + (hint.strip()[:3000] or "(none: keep it generic: an upbeat modern song)"))
+    if avoid_titles:
+        parts.append("Do not reuse these titles: " + "; ".join(avoid_titles[:25]))
+    parts.append(META_SCHEMA)
+    headers = {"x-api-key": cfg.anthropic_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+    body = {"model": cfg.claude_model, "max_tokens": 3000, "system": SYSTEM,
+            "messages": [{"role": "user", "content": "\n\n".join(parts)}]}
+    last_err = None
+    for attempt in range(3):
+        resp = net.request("POST", API_URL, headers=headers, json=body, timeout=120)
+        if resp.status_code != 200:
+            raise RuntimeError(f"Claude API {resp.status_code}: {resp.text[:300]}")
+        text = "".join(b.get("text", "") for b in resp.json().get("content", []) if b.get("type") == "text")
+        try:
+            data = _extract_json(text)
+            for key in ("title", "image_prompt", "yt_title", "yt_description", "yt_tags"):
+                if not data.get(key):
+                    raise ValueError(f"missing field: {key}")
+            tags = data["yt_tags"]
+            if isinstance(tags, str):
+                tags = [t.strip() for t in tags.split(",")]
+            data["yt_tags"] = [str(t).strip()[:30] for t in tags if str(t).strip()][:18]
+            data["title"] = (title or str(data["title"])).strip()[:50]
+            data["yt_title"] = str(data["yt_title"]).strip()[:95]
+            data["yt_description"] = str(data["yt_description"]).strip()[:3000]
+            return data
+        except (ValueError, json.JSONDecodeError) as exc:
+            last_err = exc
+            log.warning("Claude meta reply invalid (attempt %s): %s", attempt + 1, exc)
+    raise RuntimeError(f"Claude returned invalid JSON 3 times: {last_err}")

@@ -4,6 +4,7 @@ Run:  python3 -I tests/smoke_test.py   (from the project folder)
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -327,6 +328,27 @@ assert sorted(_seen) == sorted(i for i, _ in backgrounds.list_all(cfg)), _seen
 _new_id, _ = backgrounds.add(cfg, CLIP)
 assert backgrounds.pick(cfg)[0] == _new_id
 backgrounds.remove(cfg, _new_id)
+
+# owner uploads a finished mp3
+class _TG5:
+    def __init__(self): self.sent = []
+    def send(self, *a, **k): self.sent.append(a)
+    def download_file(self, file_id, dest): shutil.copy(LONG, dest)
+_old5 = bot.tg; bot.tg = _TG5(); bot.wake = _th.Event()
+_mureka_calls = len([c for c in calls if "mureka" in c[1]])
+bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "audio": {"file_id": "a1", "file_size": 900_000, "title": "Night Ride"},
+            "caption": "Night Ride\nclub house, dark and driving"})
+_up = [r for r in db.recent(5) if r["style"] == "__upload__"]
+for _ in range(100):
+    if _up: break
+    import time as _t5; _t5.sleep(0.1); _up = [r for r in db.recent(5) if r["style"] == "__upload__"]
+assert _up and _up[0]["status"] == "queued" and _up[0]["title"] == "Night Ride", _up
+pipe.produce(_up[0]["id"])
+_uj = db.get(_up[0]["id"])
+assert _uj["status"] == "review" and _uj["yt_title"] and _uj["mp4_path"], _uj["status"]
+assert len([c for c in calls if "mureka" in c[1]]) == _mureka_calls  # no song generation, no cost
+db.update(_uj["id"], status="failed")
+bot.tg = _old5
 
 # collect mode: videos wait, Tayyor joins them into ONE background
 n_before = len(backgrounds.list_all(cfg))

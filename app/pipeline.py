@@ -110,6 +110,17 @@ class Pipeline:
         self.db.update(job_id, status="producing", error="")
         folder = self.job_dir(job_id)
 
+        if job["style"] == "__upload__" and not job["yt_title"]:
+            # a finished track the owner uploaded: only the YouTube metadata is needed, no song generation
+            meta = claude_api.make_meta(self.cfg, hint=job["raw_text"], title=job["title"],
+                                        avoid_titles=self.db.recent_titles(25))
+            self.db.update(
+                job_id, title=meta["title"], image_prompt=meta["image_prompt"], yt_title=meta["yt_title"],
+                yt_description=meta["yt_description"], yt_tags=json.dumps(meta["yt_tags"]),
+                lyrics=job["lyrics"] or "[uploaded track]",
+            )
+            job = self.db.get(job_id)
+
         if not job["lyrics"]:
             pkg = claude_api.make_package(
                 self.cfg, raw_text=job["raw_text"], theme=job["theme"],

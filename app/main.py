@@ -25,6 +25,7 @@ Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot tilni (🇺🇿 o'zbekcha / �
 /holat — navbat, keyingi joylash vaqti, bugungi sarf
 /navbat — oxirgi 10 ta qo'shiq
 /eksport <id> — Spotify distribyutori uchun: mp3, kvadrat muqova, matn
+Tayyor mp3 yuborsangiz (izoh bilan: nomi, janr) — bot muqova+video qilib, tasdiqlash uchun yuboradi
 /videolar — tayyor/tasdiq kutayotgan videolar ro'yxati; bosib ko'rish (katta videolar past sifatda ko'rsatiladi)
 /yarat [mavzu] — hoziroq yangi qo'shiq yaratish (mavzu ixtiyoriy)
 /joyla [id] — tasdiqlanayotgan (yoki keyingi tayyor) videoni YouTube'ga joylash
@@ -441,6 +442,39 @@ class Bot:
             log.exception("background upload failed")
             self.tg.send(f"⚠️ Videoni qabul qilib bo'lmadi: {str(exc)[:300]}", chat_id)
 
+    def add_uploaded_song(self, audio: dict, caption: str, chat_id: int) -> None:
+        """Owner sent a finished mp3: make the cover/video + YouTube metadata around it (no song generation)."""
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        if int(audio.get("file_size") or 0) > 20 * 1024 * 1024:
+            self.tg.send("⚠️ Audio 20 MB dan katta (Telegram botlar shundan kattasini olmaydi). Qisqaroq yoki siqilgan mp3 yuboring.", chat_id)
+            return
+        try:
+            first = caption.splitlines()[0].strip() if caption else ""
+            title = (first if 0 < len(first) <= 45 else "") or (audio.get("title") or "").strip() \
+                or Path(audio.get("file_name") or "").stem.replace("_", " ").strip()
+            job_id = self.db.add_job("user", caption or "", "", status="pending")
+            folder = self.pipeline.job_dir(job_id)
+            folder.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory() as tmp:
+                src = Path(tmp) / "in_audio"
+                self.tg.download_file(audio["file_id"], src)
+                mp3 = folder / "song.mp3"
+                subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-vn", "-c:a", "libmp3lame", "-b:a", "256k", str(mp3)],
+                                check=True, timeout=300)
+            if video.probe_duration(mp3) < 20:
+                raise ValueError("Audio juda qisqa")
+            self.db.update(job_id, title=title[:45], style="__upload__", mp3_path=str(mp3), lyrics="")
+            self.db.update(job_id, status="queued")
+            self.wake.set()
+            self.tg.send(f"📥 #{job_id} qabul qilindi{(' — ' + title) if title else ''}. Muqova va videoni yig'ib, tasdiqlash uchun yuboraman "
+                         f"(1–3 daqiqa). Mureka'ga pul sarflanmaydi.\n"
+                         f"Maslahat: audio bilan birga izoh yozsangiz (nomi, janr, nima haqida), YouTube matni shunga moslanadi.", chat_id)
+        except Exception as exc:
+            log.exception("uploaded song failed")
+            self.tg.send(f"⚠️ Audioni qabul qilib bo'lmadi: {str(exc)[:300]}", chat_id)
+
     def merge_dir(self):
         d = self.cfg.data_dir / "merge_tmp"
         d.mkdir(parents=True, exist_ok=True)
@@ -550,6 +584,11 @@ class Bot:
         media = msg.get("video") or msg.get("animation") or (doc if str(doc.get("mime_type", "")).startswith("video/") else None)
         if media:
             self.merge_collect(media, chat_id)
+            return
+        audio = msg.get("audio") or (doc if str(doc.get("mime_type", "")).startswith("audio/") else None)
+        if audio:
+            threading.Thread(target=self.add_uploaded_song, args=(audio, (msg.get("caption") or "").strip(), chat_id),
+                             daemon=True).start()
             return
         text = (msg.get("text") or "").strip()
         if not text:
