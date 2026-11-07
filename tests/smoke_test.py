@@ -446,6 +446,12 @@ for _n in range(1, _brand.THEME_COUNT + 1):  # every theme renders a still witho
     _orig_cover(TMP / f"theme_{_n}.png", _n, "T", size=(320, 180))
 _brand.render, _brand.cover_frame = _orig_render, _orig_cover
 db.update(job_br, status="failed")
+# automatic songs ignore the mode and always get a logo background
+for _mode in ("video", "rasm", "aralash"):
+    db.kv_set("bg_mode", _mode)
+    _ja = db.add_job("auto", theme="pop | test")
+    assert pipe._choose_look(_ja)[0] == "brand", _mode
+    db.update(_ja, status="failed")
 db.kv_set("bg_mode", "video")
 
 # 4) queue priority: user jobs first

@@ -87,6 +87,9 @@ class Pipeline:
         """Background for this song: ("brand", n) = logo + circular spectrum on animated theme n (1-11),
         ("clip", path) = one of the owner's looping clips, or None = an AI picture (OpenAI)."""
         mode = self.db.kv_get("bg_mode", "brand")
+        job = self.db.get(job_id)
+        if job and job["source"] == "auto":
+            mode = "brand"  # automatic songs always use the 11 logo backgrounds, never clips or AI pictures
         forced = self.db.kv_get(f"bgforce:{job_id}", "")
         prev = self.db.kv_get(f"bg:{job_id}", "")
         clips = backgrounds.list_all(self.cfg)
