@@ -228,7 +228,7 @@ assert db.get(job_u)["status"] == "posted", db.get(job_u)["status"]
 bot.wake = _th.Event()
 bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "text": "Qulab ketar ko'ksimga to'g'lar, darding olay"})
 pend = [r for r in db.recent(5) if r["status"] == "pending"]
-assert len(pend) == 1 and btns and any(b[1].startswith("lang:uz:") for b in btns[-1][1]), btns
+assert len(pend) == 1 and btns and any(b[1].startswith("lang:uz:") for row in btns[-1][1] for b in row) and any(b[1].startswith("lang:tr:") for row in btns[-1][1] for b in row), btns
 pid = pend[0]["id"]
 assert db.next_to_produce() is None or db.next_to_produce()["id"] != pid  # not produced before the choice
 btns.clear()
@@ -249,6 +249,9 @@ assert "UZBEK" in prompt and "lyrics in UZBEK" in prompt and "NOT in English" in
 assert "club house" in prompt and "GENRE requested" in prompt and "CLUB STRUCTURE" in prompt
 assert "male lead vocal" in prompt and "VOCALS requested" in prompt
 assert "male lead vocal" in db.get(pid)["style"] and "female" not in db.get(pid)["style"].lower().replace("male and female", "")
+from app import claude_api as _ca  # noqa: E402
+_tr = _ca.build_user_message("Qulab ketar ko'ksimga to'g'lar, darding olay", "", [], "tr")
+assert "TURKISH" in _tr and "NOT in English" in _tr and "lyrics in TURKISH" in _tr and "Turkish-language vocals" in _tr
 # English choice keeps the old behaviour
 from app import claude_api as _ca  # noqa: E402
 assert "ENGLISH song" in _ca.build_user_message("some poem text here", "", [], "en")

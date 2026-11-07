@@ -181,12 +181,29 @@ UZBEK_BRIEF = (
 )
 
 
+TURKISH_BRIEF = (
+    "The owner chose TURKISH as the song language. The supplied text may be in Uzbek or another language: write the song "
+    "in natural, modern, singable TURKISH (Istanbul Turkish, correct Turkish letters ç ğ ı ö ş ü), NOT in English. "
+    "Keep the owner's meaning, story, feelings and imagery and as many of its strongest lines as translate well; "
+    "adapt wording for Turkish rhythm and rhyme (do not translate word for word), give it song structure with section "
+    "tags, and build the chorus from its strongest line. Field rules for this song: \"title\" is a short Turkish title; "
+    "\"lyrics\" are Turkish; \"style\" stays in English for the music generator and MUST include 'Turkish-language vocals'; "
+    "\"image_prompt\" stays in English; \"yt_title\" like '<Turkish Title> (Official Lyric Video) | Turkish <Genre> Song'; "
+    "\"yt_description\" starts with 1-2 English paragraphs (say it is a Turkish-language song and give a one-sentence "
+    "English summary of what it says), then 'Lyrics:' followed by the Turkish lyrics; \"yt_tags\" stay English but must "
+    "include 'turkish song', 'turkish music', 'türkçe şarkı'."
+)
+
+LANG_BRIEFS = {"uz": UZBEK_BRIEF, "tr": TURKISH_BRIEF}
+LANG_NAMES = {"uz": ("O'zbekcha", "UZBEK (Latin script)"), "tr": ("Turkcha", "TURKISH"), "en": ("Inglizcha", "ENGLISH")}
+
+
 def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: str = "en", genre: str = "",
                        voice: str = "") -> str:
     parts = []
-    if raw_text.strip() and language == "uz":
+    if raw_text.strip() and language in LANG_BRIEFS:
         parts.append(
-            "The channel owner supplied this text (a poem or lyrics).\n" + UZBEK_BRIEF +
+            "The channel owner supplied this text (a poem or lyrics).\n" + LANG_BRIEFS[language] +
             "\n\n--- TEXT ---\n" + raw_text.strip() + "\n--- END ---"
         )
     elif raw_text.strip():
@@ -219,8 +236,8 @@ def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: 
         parts.append(f"VOCALS requested by the owner: {VOICES[voice][1]}. The \"style\" must describe exactly this vocal "
                      "(do not mention another singer gender).")
     schema = SCHEMA_HELP
-    if language == "uz":
-        schema = schema.replace("full song lyrics in ENGLISH", "full song lyrics in UZBEK (Latin script)")
+    if language in LANG_BRIEFS:
+        schema = schema.replace("full song lyrics in ENGLISH", "full song lyrics in " + LANG_NAMES[language][1])
     parts.append(schema)
     return "\n\n".join(parts)
 

@@ -206,7 +206,7 @@ class Bot:
             f"📦 Distribyutor uchun #{job_id}\n"
             f"Nomi: {job['title']}\n"
             f"Janr (taklif): {GENRES[genre][0] if genre in GENRES else genre}\n"
-            f"Til: {'o‘zbekcha' if self.db.kv_get(f'lang:{job_id}', 'en') == 'uz' else 'inglizcha'}\n"
+            f"Til: {({'uz': 'o‘zbekcha', 'tr': 'turkcha'}).get(self.db.kv_get(f'lang:{job_id}', 'en'), 'inglizcha')}\n"
             f"SI ishtirokini belgilang: vokal, cholg'u, matn — SI yordamida.\n"
             f"Fayllar: mp3 {'✅' if mp3_ok else '⚠️ yuborilmadi'} · muqova {'✅' if sent_cover else '⚠️ yuborilmadi'}\n\n"
             f"Matn:\n{job['lyrics'][:3000]}", chat_id)
@@ -322,12 +322,12 @@ class Bot:
             return
         if data.startswith("lang:"):
             _, lang, raw_id = (data.split(":") + ["", ""])[:3]
-            job = self.db.get(int(raw_id)) if raw_id.isdigit() and lang in ("uz", "en") else None
+            job = self.db.get(int(raw_id)) if raw_id.isdigit() and lang in ("uz", "en", "tr") else None
             if not job or job["status"] != "pending":
                 self.tg.answer_callback(cb["id"], "Bu allaqachon boshlangan yoki bekor qilingan.")
                 return
             self.db.kv_set(f"lang:{job['id']}", lang)
-            name = "o'zbekcha" if lang == "uz" else "inglizcha"
+            name = {"uz": "o'zbekcha", "tr": "turkcha"}.get(lang, "inglizcha")
             self.tg.answer_callback(cb["id"], f"Til: {name}")
             self.tg.send_buttons(f"🎼 #{job['id']} ({name}). Qaysi janrda bo'lsin?", self.genre_rows(job["id"]), chat_id)
             return
@@ -678,8 +678,8 @@ class Bot:
         job_id = self.db.add_job("user", raw_text=text, status="pending")  # waits for the language choice
         self.tg.send_buttons(
             f"🎤 Matn qabul qilindi #{job_id}. Qo'shiq qaysi tilda bo'lsin?",
-            [("🇺🇿 O'zbekcha", f"lang:uz:{job_id}"), ("🇬🇧 Inglizcha", f"lang:en:{job_id}"),
-             ("❌ Bekor", f"del:{job_id}")], chat_id)
+            [[("🇺🇿 O'zbekcha", f"lang:uz:{job_id}"), ("🇹🇷 Turkcha", f"lang:tr:{job_id}"),
+              ("🇬🇧 Inglizcha", f"lang:en:{job_id}")], [("❌ Bekor", f"del:{job_id}")]], chat_id)
 
     def poll_loop(self) -> None:
         offset = None
