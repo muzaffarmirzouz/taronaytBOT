@@ -246,8 +246,9 @@ bot.handle_callback({"id": "c3", "from": {"id": 1}, "message": {"chat": {"id": 1
 assert db.kv_get(f"genre:{pid}") == "club"  # a second tap changes nothing
 pipe.produce(pid)
 prompt = last_claude["body"]["messages"][0]["content"]
-assert "UZBEK" in prompt and "lyrics in UZBEK" in prompt and "NOT in English" in prompt
-assert "club house" in prompt and "GENRE requested" in prompt and "CLUB STRUCTURE" in prompt
+# Uzbek text is sung exactly as the owner wrote it (Claude only packages it), so no genre restructuring either
+assert "Uzbek-language vocals" in prompt and "EXACTLY as written" in prompt and "NOT in English" not in prompt
+assert "club house" in prompt and "GENRE requested" in prompt and "CLUB STRUCTURE" not in prompt
 assert "male vocal" in prompt and "VOCALS requested" in prompt
 assert "male vocal" in db.get(pid)["style"] and "female" not in db.get(pid)["style"].lower().replace("male and female", "")
 from app import claude_api as _ca  # noqa: E402
@@ -262,10 +263,14 @@ cfg.auto_turkish_percent = 0
 _aj2 = pipe.add_auto_job("pop | rainy day")
 assert db.kv_get(f"lang:{_aj2}", "") == ""
 db.update(_aj, status="failed"); db.update(_aj2, status="failed")
-# English choice keeps the old behaviour
+# the owner's own English text is sung exactly as sent: Claude only packages it
 from app import claude_api as _ca  # noqa: E402
-assert "ENGLISH song" in _ca.build_user_message("some poem text here", "", [], "en")
-assert "lyrics in ENGLISH" in _ca.build_user_message("some poem text here", "", [], "en")
+_en = _ca.build_user_message("some poem text here", "", [], "en")
+assert "EXACTLY as written" in _en and "ENGLISH song" not in _en
+assert _ca._enforce_owner_lyrics("a b c", "[Verse]\na b c") == "[Verse]\na b c"   # only tags added: accepted
+assert _ca._enforce_owner_lyrics("a b c", "[Verse]\nx y z") == "a b c"             # words changed: owner's text wins
+# automatic songs (no owner text) are still written by Claude
+assert "brand-new original song" in _ca.build_user_message("", "pop | rainy day", [], "en")
 db.update(pid, status="failed")
 
 # 3h) owner's looping background clips

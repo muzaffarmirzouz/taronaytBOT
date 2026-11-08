@@ -45,19 +45,19 @@ def _extract_json(text: str) -> dict:
     return json.loads(text[start:end + 1])
 
 
-def _validate(data: dict, voice: str = "") -> dict:
+def _validate(data: dict, voice: str = "", verbatim: bool = False) -> dict:
     required = ["title", "lyrics", "style", "image_prompt", "yt_title", "yt_description", "yt_tags"]
     for key in required:
         if not data.get(key):
             raise ValueError(f"missing field: {key}")
-    if "[" not in data["lyrics"]:
+    if "[" not in data["lyrics"] and not verbatim:
         raise ValueError("lyrics have no section tags")
     tags = data["yt_tags"]
     if isinstance(tags, str):
         tags = [t.strip() for t in tags.split(",")]
     data["yt_tags"] = [str(t).strip() for t in tags if str(t).strip()]
     data["title"] = str(data["title"]).strip()[:50]
-    data["lyrics"] = _no_intro(str(data["lyrics"]).strip())[:4800]
+    data["lyrics"] = (str(data["lyrics"]).strip() if verbatim else _no_intro(str(data["lyrics"]).strip()))[:4800]
     style = str(data["style"]).strip()
     if voice:
         style = _set_vocal(style, voice, limit=290 - len(FAST_START) - 2)
@@ -83,6 +83,16 @@ def _no_intro(lyrics: str) -> str:
     import re
     out = re.sub(r"^\s*\[(?:intro|instrumental|music|build[- ]?up)[^\]]*\][^\[]*", "", lyrics, flags=re.I)
     return out.strip() or lyrics
+
+
+def _enforce_owner_lyrics(raw_text: str, claude_lyrics: str) -> str:
+    """Final guarantee: the sung lyrics are the owner's own words. Claude's version is used only when it is the same
+    words in the same order (i.e. it merely added section tags); otherwise the owner's text goes out untouched."""
+    mine = owner_lyrics(raw_text)
+    if _words(claude_lyrics) == _words(mine):
+        return claude_lyrics.strip()
+    log.warning("Claude changed the owner's lyrics; using the owner's text unchanged")
+    return mine
 
 
 # key -> (button label, instruction for the music style)
@@ -210,10 +220,48 @@ LANG_BRIEFS = {"uz": UZBEK_BRIEF, "tr": TURKISH_BRIEF}
 LANG_NAMES = {"uz": ("O'zbekcha", "UZBEK (Latin script)"), "tr": ("Turkcha", "TURKISH"), "en": ("Inglizcha", "ENGLISH")}
 
 
+VERBATIM_LANGS = ("en", "uz")  # the owner's text is sung exactly as sent (Turkish needs a translation, so it is not)
+
+
+def owner_lyrics(raw_text: str) -> str:
+    """The owner's text exactly as sent, minus the 'Janr:' / 'Uslub:' control lines (those are instructions, not lyrics)."""
+    lines = [ln for ln in raw_text.strip().splitlines()
+             if not re.match(r"^\s*(janr|uslub)\s*:", ln, flags=re.I)]
+    return "\n".join(lines).strip()
+
+
+def is_verbatim(raw_text: str, language: str) -> bool:
+    return bool(raw_text.strip()) and language in VERBATIM_LANGS
+
+
+def _words(text: str) -> list:
+    """Words only, section tags and punctuation ignored: used to prove Claude did not change a single word."""
+    text = re.sub(r"\[[^\]]*\]", " ", text)
+    return re.findall(r"[\w']+", text.lower())
+
+
 def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: str = "en", genre: str = "",
                        voice: str = "") -> str:
     parts = []
-    if raw_text.strip() and language in LANG_BRIEFS:
+    if is_verbatim(raw_text, language):
+        # the lyrics stay the owner's: Claude only wraps them (title, style, image, YouTube texts)
+        lyrics = owner_lyrics(raw_text)
+        parts.append(
+            "The channel owner wrote the lyrics below. They will be sung EXACTLY as written: NEVER rewrite, translate, "
+            "shorten, extend, reorder or 'improve' any word. Your job is only the packaging around them.\n"
+            "Field rules for this song: \"lyrics\" must be the owner's text with the SAME words in the SAME order. "
+            "If it has no section tags, you may only insert tags such as [Verse], [Pre-Chorus], [Chorus], [Bridge] on their own "
+            "lines between existing lines; if it already has tags, return it unchanged. Do not add an [Intro]. "
+            "\"title\" is a short title taken from the lyrics' own theme. \"style\" is the music style prompt in English that "
+            "fits the lyrics' mood" + (" and MUST include 'Uzbek-language vocals'" if language == "uz" else "") + ". "
+            "\"image_prompt\" stays in English. \"yt_title\", \"yt_description\" and \"yt_tags\" are in English" +
+            (" (say in the description that it is an Uzbek-language song from Central Asia, add a one-sentence English "
+             "summary, then 'Lyrics:' followed by the lyrics unchanged; tags must include 'uzbek song', 'uzbek music', "
+             "'central asian music')" if language == "uz" else
+             " (the description ends with 'Lyrics:' followed by the lyrics unchanged)") + ".\n\n"
+            "--- LYRICS ---\n" + lyrics + "\n--- END ---"
+        )
+    elif raw_text.strip() and language in LANG_BRIEFS:
         parts.append(
             "The channel owner supplied this text (a poem or lyrics).\n" + LANG_BRIEFS[language] +
             "\n\n--- TEXT ---\n" + raw_text.strip() + "\n--- END ---"
@@ -243,20 +291,26 @@ def build_user_message(raw_text: str, theme: str, avoid_titles: list, language: 
     if avoid_titles:
         parts.append("Do NOT reuse or closely echo these recent titles: " + "; ".join(avoid_titles[:25]))
     rule_key = genre if genre in GENRES else genre_key((theme or "").partition("|")[0])
-    if rule_key in GENRE_LYRIC_RULES:
+    verbatim = is_verbatim(raw_text, language)
+    if rule_key in GENRE_LYRIC_RULES and not verbatim:  # never restructure the owner's own lyrics
         parts.append("LYRICS FORMAT FOR THIS GENRE (overrides the generic structure above): " + GENRE_LYRIC_RULES[rule_key] +
                      " Never add an [Intro] section.")
     if genre in GENRES and raw_text.strip():
         parts.append(
-            f"GENRE requested by the owner: {GENRES[genre][1]}. The \"style\" field must clearly describe this genre "
-            "and the lyrics must fit its energy. (If the owner's text contains a line starting with 'Janr:' or "
+            f"GENRE requested by the owner: {GENRES[genre][1]}. The \"style\" field must clearly describe this genre"
+            + ("." if verbatim else " and the lyrics must fit its energy.")
+            + " (If the owner's text contains a line starting with 'Janr:' or "
             "'Uslub:', that line has priority over this genre.)"
         )
     if voice in VOICES:
         parts.append(f"VOCALS requested by the owner: {VOICES[voice][1]}. The \"style\" must describe exactly this vocal "
                      "(do not mention another singer gender).")
     schema = SCHEMA_HELP
-    if language in LANG_BRIEFS:
+    if verbatim:
+        schema = re.sub(r'- "lyrics":.*?(?=\n- "style")',
+                        '- "lyrics": the owner\'s lyrics with the same words in the same order (only section tags may be added).',
+                        schema, flags=re.S)
+    elif language in LANG_BRIEFS:
         schema = schema.replace("full song lyrics in ENGLISH", "full song lyrics in " + LANG_NAMES[language][1])
     parts.append(schema)
     return "\n\n".join(parts)
@@ -283,7 +337,10 @@ def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | 
         data = resp.json()
         text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
         try:
-            return _validate(_extract_json(text), voice)
+            pkg = _validate(_extract_json(text), voice, verbatim=is_verbatim(raw_text, language))
+            if is_verbatim(raw_text, language):
+                pkg["lyrics"] = _enforce_owner_lyrics(raw_text, pkg["lyrics"])
+            return pkg
         except (ValueError, json.JSONDecodeError) as exc:
             last_err = exc
             log.warning("Claude reply invalid (attempt %s): %s | stop=%s | start=%r", attempt + 1, exc,
