@@ -22,7 +22,7 @@ SCHEMA_HELP = """Return a JSON object with exactly these keys:
   like [Verse], [Pre-Chorus], [Chorus], [Bridge], [Outro]. Singable: consistent syllable counts, clean rhymes,
   a memorable repeated hook in the chorus. Original wording only.
 - "style": music style prompt for the song generator, max 220 characters: genre, mood, tempo/BPM, vocal type
-  (e.g. warm male vocal / airy female vocal), 3-4 instruments. NEVER mention real artists, bands or songs.
+  (e.g. deep gritty male vocal / full low alto female vocal; never soft or airy), 3-4 instruments. NEVER mention real artists, bands or songs.
   The song must get to the vocals FAST: include "very short 4-bar intro, vocals start within 10 seconds" in the style.
   The lyrics must start directly with the first verse or the chorus: NO [Intro] tag and no instrumental opening section.
 - "image_prompt": a vivid prompt for a 3:2 landscape illustration that visualises THIS song's theme and story: one clear
@@ -102,6 +102,9 @@ GENRES = {
     "trap": ("🎤 Hip-Hop / Trap",
              "modern trap, 138-142 BPM, deep 808 bass, rolling hi-hats with triplets, dark bell melody, confident melodic rap-sung hook, "
              "ad-libs, hard-hitting punchy drums, clean heavy mix"),
+    "rap": ("🎙 Rep",
+            "modern rap, 90-96 BPM, hard punchy boom-bap and trap drums, deep sub bass, dark piano or guitar loop, "
+            "confident rhythmic rap verses with sharp flow and internal rhymes, a short melodic sung hook, gritty polished mix"),
     "ballad": ("💞 Ballada",
                "cinematic emotional pop ballad, 70-76 BPM, intimate piano, warm strings, soft building drums, "
                "expressive heartfelt vocal with a powerful final chorus, rich spacious studio mix"),
@@ -123,14 +126,19 @@ GENRE_LYRIC_RULES = {
            "a huge repeated chorus hook. 1200-1600 characters.",
     "trap": "TRAP STRUCTURE: rhythmic sung-rap verses with internal rhymes and ad-libs in brackets, a short melodic hook repeated. "
             "Order: [Hook] [Verse] [Hook] [Verse] [Bridge] [Hook]. 1200-1600 characters.",
+    "rap": "RAP STRUCTURE: the verses are real RAPPED lines (not sung): 8-12 lines each, dense rhythm, internal rhymes and multi-syllable "
+           "rhymes, short bracketed ad-libs, storytelling or boasting with concrete details. Order: [Hook] (4 lines, sung, catchy) "
+           "[Verse] [Hook] [Verse] [Bridge] [Hook]. 1400-1900 characters.",
     "ballad": "BALLAD STRUCTURE: [Verse] [Pre-Chorus] [Chorus] [Verse] [Pre-Chorus] [Chorus] [Bridge] [Final Chorus]. Vivid imagery, "
               "slow phrasing, emotional peak in the bridge.",
 }
 
 
 VOICES = {
-    "male": ("👨 Erkak ovozi", "deep warm male lead vocal, rich baritone, confident and powerful"),
-    "female": ("👩 Ayol ovozi", "bright female lead vocal, clear and expressive"),
+    "male": ("👨 Erkak ovozi", "deep powerful male lead vocal, low rich baritone, strong chest voice, slightly raspy and gritty, "
+                              "full-bodied and assertive, not soft or breathy"),
+    "female": ("👩 Ayol ovozi", "full-bodied female lead vocal, low rich alto, strong chest voice, powerful and soulful, "
+                                "confident and mature, not thin, not airy"),
     "duet": ("👫 Duet", "male and female duet vocals, trading lines and harmonising on the chorus"),
 }
 
@@ -160,7 +168,8 @@ def genre_key(text: str) -> str:
     for key, words in (("remix", ("remix", "edm", "festival", "bass drop")),
                        ("afro", ("afro", "amapiano")),
                        ("club", ("club", "house", "dance", "disco", "techno", "electro")),
-                       ("trap", ("trap", "hip-hop", "hip hop", "rap")),
+                       ("trap", ("trap",)),
+                       ("rap", ("rap", "hip-hop", "hip hop")),
                        ("ballad", ("ballad", "slow")),
                        ("pop", ("pop",))):
         if any(w in t for w in words):

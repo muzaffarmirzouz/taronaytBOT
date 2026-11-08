@@ -37,6 +37,8 @@ IDEAS = [
     ("amapiano-style dance groove", "weekend freedom and dancing with friends"),
     ("future bass club anthem", "chasing the night until sunrise"),
     ("tropical house", "summer festival and neon lights"),
+    ("hard rap, boom-bap and trap drums, rapped verses with a sung hook", "rising from the streets with nothing but a dream"),
+    ("melodic rap, dark piano loop, deep 808", "late night drive and unspoken words"),
 ]
 
 
