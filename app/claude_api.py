@@ -126,9 +126,9 @@ GENRE_LYRIC_RULES = {
            "a huge repeated chorus hook. 1200-1600 characters.",
     "trap": "TRAP STRUCTURE: rhythmic sung-rap verses with internal rhymes and ad-libs in brackets, a short melodic hook repeated. "
             "Order: [Hook] [Verse] [Hook] [Verse] [Bridge] [Hook]. 1200-1600 characters.",
-    "rap": "RAP STRUCTURE: the verses are real RAPPED lines (not sung): 8-12 lines each, dense rhythm, internal rhymes and multi-syllable "
+    "rap": "RAP STRUCTURE: the verses are real RAPPED lines (not sung): 6-8 lines each, dense rhythm, internal rhymes and multi-syllable "
            "rhymes, short bracketed ad-libs, storytelling or boasting with concrete details. Order: [Hook] (4 lines, sung, catchy) "
-           "[Verse] [Hook] [Verse] [Bridge] [Hook]. 1400-1900 characters.",
+           "[Verse] [Hook] [Verse] [Hook]. HARD LIMIT 1300 characters, never repeat a line more than 4 times, no endless ad-lib chains.",
     "ballad": "BALLAD STRUCTURE: [Verse] [Pre-Chorus] [Chorus] [Verse] [Pre-Chorus] [Chorus] [Bridge] [Final Chorus]. Vivid imagery, "
               "slow phrasing, emotional peak in the bridge.",
 }
@@ -268,7 +268,7 @@ def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | 
     }
     body = {
         "model": cfg.claude_model,
-        "max_tokens": 4000,
+        "max_tokens": 12000,
         "system": SYSTEM,
         "messages": [{"role": "user", "content": build_user_message(raw_text, theme, avoid_titles or [], language, genre, voice)}],
     }
@@ -288,7 +288,7 @@ def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | 
             # next try: say plainly that only the JSON object is wanted, and ask for a simpler, safer take
             body["messages"] = [{"role": "user", "content": body["messages"][0]["content"] +
                                  "\n\nIMPORTANT: reply with ONE valid JSON object and nothing else (no commentary, no refusal text). "
-                                 "Keep the lyrics clean and positive, free of violence, drugs or explicit words. Escape quotes and newlines properly."}]
+                                 "Keep the lyrics SHORT (max 1200 characters total, no endless repetition), clean and positive. Escape quotes and newlines properly."}]
     raise RuntimeError(f"Claude returned invalid JSON 3 times: {last_err}")
 
 
