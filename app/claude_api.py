@@ -89,19 +89,19 @@ def _no_intro(lyrics: str) -> str:
 GENRES = {
     "club": ("🎧 Klub / Dance",
              "club house / dance-pop, 124-128 BPM, four-on-the-floor punchy kick, rolling sidechained bassline, bright plucky synth stabs, "
-             "filtered build-up riser into a big euphoric drop, catchy vocal hook, wide polished club mix"),
+             "filtered build-up riser into a euphoric drop, catchy vocal hook, polished balanced mix"),
     "remix": ("🔥 Remix / EDM",
-              "festival EDM remix, 126-128 BPM, energetic build-up with snare roll, huge bass drop, supersaw leads, sidechain pump, "
-              "chopped vocal hook, crisp hi-hats, loud modern club master"),
+              "festival EDM remix, 126-128 BPM, energetic build-up with snare roll, bass drop, supersaw leads, sidechain pump, "
+              "chopped vocal hook, crisp hi-hats, clean balanced master"),
     "afro": ("🌴 Afro House",
              "afro house / amapiano, 118-122 BPM, deep log-drum bass, shakers and congas, warm pads, smooth airy vocal chants, "
              "hypnotic groove with an energetic percussion break, sunny and danceable, clean polished mix"),
     "pop": ("🎉 Sho'x Pop",
             "upbeat dance-pop, 112-120 BPM, tight bouncy drums, handclaps, bright synths and plucks, funky bass, "
-            "huge singalong chorus with stacked vocal harmonies, glossy radio-ready production"),
+            "singalong chorus with stacked vocal harmonies, glossy radio-ready production"),
     "trap": ("🎤 Hip-Hop / Trap",
              "modern trap, 138-142 BPM, deep 808 bass, rolling hi-hats with triplets, dark bell melody, confident melodic rap-sung hook, "
-             "ad-libs, hard-hitting punchy drums, clean heavy mix"),
+             "ad-libs, punchy drums, clean balanced mix"),
     "rap": ("🎙 Rep",
             "modern rap, 90-96 BPM, hard punchy boom-bap and trap drums, deep sub bass, dark piano or guitar loop, "
             "confident rhythmic rap verses with sharp flow and internal rhymes, a short melodic sung hook, gritty polished mix"),
@@ -123,7 +123,7 @@ GENRE_LYRIC_RULES = {
     "afro": "AFRO HOUSE STRUCTURE: relaxed rhythmic lines with call-and-response, repeated chant phrases and short hum parts "
             "(ooh / yeah / na-na). Order: [Verse] [Chorus] [Verse] [Chorus] [Bridge] (percussion break, chant only) [Chorus]. 1000-1400 characters.",
     "pop": "DANCE-POP STRUCTURE: [Verse] [Pre-Chorus] [Chorus] [Verse] [Pre-Chorus] [Chorus] [Bridge] [Chorus]. Playful, singable lines, "
-           "a huge repeated chorus hook. 1200-1600 characters.",
+           "a big repeated chorus hook. 1200-1600 characters.",
     "trap": "TRAP STRUCTURE: rhythmic sung-rap verses with internal rhymes and ad-libs in brackets, a short melodic hook repeated. "
             "Order: [Hook] [Verse] [Hook] [Verse] [Bridge] [Hook]. 1200-1600 characters.",
     "rap": "RAP STRUCTURE: the verses are real RAPPED lines (not sung): 6-8 lines each, dense rhythm, internal rhymes and multi-syllable "
@@ -135,11 +135,9 @@ GENRE_LYRIC_RULES = {
 
 
 VOICES = {
-    "male": ("👨 Erkak ovozi", "very deep low bass-baritone male vocal, dark husky thick resonant voice, mature man, "
-                              "vocals loud and upfront, instrumental mixed lower"),
-    "female": ("👩 Ayol ovozi", "deep low contralto female vocal, husky smoky thick resonant chest voice, mature woman, "
-                                "not girlish or thin, vocals loud and upfront, instrumental mixed lower"),
-    "duet": ("👫 Duet", "male and female duet vocals, trading lines and harmonising on the chorus, deep rich voices, vocals loud and upfront, instrumental mixed lower"),
+    "male": ("👨 Erkak ovozi", "very deep low baritone male vocal, dark husky thick voice, vocals loud and upfront, instrumental mixed low"),
+    "female": ("👩 Ayol ovozi", "deep low contralto female vocal, husky smoky thick chest voice, vocals loud and upfront, instrumental mixed low"),
+    "duet": ("👫 Duet", "male and female duet vocals, trading lines and harmonising on the chorus, deep rich voices, vocals loud and upfront, instrumental mixed low"),
 }
 
 
@@ -159,7 +157,12 @@ def _set_vocal(style: str, voice: str, limit: int = 290) -> str:
                    r"(?:\s+(?:lead|rap|sung|backing))?\s+(?:vocals?|voice|singer|duet)\b", "", style, flags=re.I)
     style = re.sub(r"\s*,\s*,+", ",", style).strip(" ,;")
     voice_text = VOICES[voice][1]
-    return (style[: limit - len(voice_text) - 2].rstrip(" ,.;") + ", " + voice_text)[:limit]
+    # the voice and the mix go FIRST: the generator weighs the start of the prompt most, and the genre text is long
+    full = voice_text + ", " + style
+    if len(full) > limit:  # cut at a comma, not in the middle of a word
+        full = full[:limit]
+        full = full[: full.rfind(",")] if "," in full[len(voice_text):] else full
+    return full.rstrip(" ,.;")
 
 
 def genre_key(text: str) -> str:
