@@ -283,7 +283,12 @@ def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | 
             return _validate(_extract_json(text), voice)
         except (ValueError, json.JSONDecodeError) as exc:
             last_err = exc
-            log.warning("Claude reply invalid (attempt %s): %s", attempt + 1, exc)
+            log.warning("Claude reply invalid (attempt %s): %s | stop=%s | start=%r", attempt + 1, exc,
+                        data.get("stop_reason"), text[:200])
+            # next try: say plainly that only the JSON object is wanted, and ask for a simpler, safer take
+            body["messages"] = [{"role": "user", "content": body["messages"][0]["content"] +
+                                 "\n\nIMPORTANT: reply with ONE valid JSON object and nothing else (no commentary, no refusal text). "
+                                 "Keep the lyrics clean and positive, free of violence, drugs or explicit words. Escape quotes and newlines properly."}]
     raise RuntimeError(f"Claude returned invalid JSON 3 times: {last_err}")
 
 
