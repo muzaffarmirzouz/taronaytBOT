@@ -135,11 +135,11 @@ GENRE_LYRIC_RULES = {
 
 
 VOICES = {
-    "male": ("👨 Erkak ovozi", "deep powerful male lead vocal, low rich baritone, strong chest voice, slightly raspy and gritty, "
-                              "full-bodied and assertive, not soft or breathy"),
-    "female": ("👩 Ayol ovozi", "full-bodied female lead vocal, low rich alto, strong chest voice, powerful and soulful, "
-                                "confident and mature, not thin, not airy"),
-    "duet": ("👫 Duet", "male and female duet vocals, trading lines and harmonising on the chorus"),
+    "male": ("👨 Erkak ovozi", "very deep low bass-baritone male vocal, dark husky thick resonant voice, mature man, "
+                              "vocals loud and upfront, instrumental mixed lower"),
+    "female": ("👩 Ayol ovozi", "deep low contralto female vocal, husky smoky thick resonant chest voice, mature woman, "
+                                "not girlish or thin, vocals loud and upfront, instrumental mixed lower"),
+    "duet": ("👫 Duet", "male and female duet vocals, trading lines and harmonising on the chorus, deep rich voices, vocals loud and upfront, instrumental mixed lower"),
 }
 
 

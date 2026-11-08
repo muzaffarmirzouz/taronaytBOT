@@ -104,10 +104,12 @@ def make_loop(src: Path, out_path: Path, max_seconds: int = 30) -> Path:
 
 
 def master_audio(src: Path, out_path: Path) -> Path:
-    """Light 'radio' mastering: high-pass, gentle compression, loudness to -14 LUFS (YouTube's reference level)."""
+    """Light 'radio' mastering: high-pass, gentle compression, a little less bass/treble, more voice presence, -16 LUFS."""
     _run(["ffmpeg", "-y", "-i", str(src), "-af",
-          "highpass=f=25,acompressor=threshold=-18dB:ratio=2.5:attack=20:release=250:makeup=2,"
-          "loudnorm=I=-14:TP=-1.0:LRA=9",
+          "highpass=f=30,equalizer=f=70:t=q:w=1:g=-3,equalizer=f=220:t=q:w=1:g=1.5,"
+          "equalizer=f=2800:t=q:w=1:g=2.5,equalizer=f=9000:t=q:w=1:g=-1.5,"
+          "acompressor=threshold=-18dB:ratio=2.5:attack=20:release=250:makeup=2,"
+          "loudnorm=I=-16:TP=-1.5:LRA=9",
           "-ar", "44100", "-c:a", "libmp3lame", "-b:a", "256k", str(out_path)], timeout=600)
     return out_path
 
