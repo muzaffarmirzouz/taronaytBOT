@@ -248,8 +248,8 @@ pipe.produce(pid)
 prompt = last_claude["body"]["messages"][0]["content"]
 assert "UZBEK" in prompt and "lyrics in UZBEK" in prompt and "NOT in English" in prompt
 assert "club house" in prompt and "GENRE requested" in prompt and "CLUB STRUCTURE" in prompt
-assert "male lead vocal" in prompt and "VOCALS requested" in prompt
-assert "male lead vocal" in db.get(pid)["style"] and "female" not in db.get(pid)["style"].lower().replace("male and female", "")
+assert "male vocal" in prompt and "VOCALS requested" in prompt
+assert "male vocal" in db.get(pid)["style"] and "female" not in db.get(pid)["style"].lower().replace("male and female", "")
 from app import claude_api as _ca  # noqa: E402
 _tr = _ca.build_user_message("Qulab ketar ko'ksimga to'g'lar, darding olay", "", [], "tr")
 assert "TURKISH" in _tr and "NOT in English" in _tr and "lyrics in TURKISH" in _tr and "Turkish-language vocals" in _tr
