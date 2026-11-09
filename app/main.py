@@ -702,6 +702,7 @@ class Bot:
 
     def poll_loop(self) -> None:
         offset = None
+        fails = 0
         while not self.stop.is_set():
             try:
                 for upd in self.tg.updates(offset):
@@ -713,9 +714,15 @@ class Bot:
                             self.handle_callback(upd["callback_query"])
                     except Exception:
                         log.exception("handler error")
-            except Exception:
-                log.exception("polling error")
-                self.stop.wait(5)
+            except Exception as exc:
+                fails += 1
+                if "Bad Gateway" in str(exc) or "Gateway" in str(exc) or "Timeout" in str(exc):
+                    log.warning("Telegram is briefly unavailable (%s); retrying", exc)  # their side, not a bug
+                else:
+                    log.exception("polling error")
+                self.stop.wait(min(5 * fails, 30))
+            else:
+                fails = 0
 
     def run(self) -> None:
         threading.Thread(target=self.worker_loop, daemon=True, name="worker").start()
