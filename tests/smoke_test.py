@@ -451,6 +451,43 @@ for _n in range(1, _brand.THEME_COUNT + 1):  # every theme renders a still witho
     _orig_cover(TMP / f"theme_{_n}.png", _n, "T", size=(320, 180))
 _brand.render, _brand.cover_frame = _orig_render, _orig_cover
 db.update(job_br, status="failed")
+# photo mode: the owner's picture + weather effects (rain, tears, wind, snow)
+from PIL import Image as _PI  # noqa: E402
+from app import photofx as _pfx  # noqa: E402
+_PI.new("RGB", (900, 1200), (90, 110, 150)).save(TMP / "photo.jpg")
+import shutil as _sh  # noqa: E402
+bot.merge_dir().mkdir(parents=True, exist_ok=True)
+_sh.copy(TMP / "photo.jpg", bot.merge_dir() / "pending_99.img")
+_np = len(backgrounds.list_photos(cfg))
+bot.handle_callback({"id": "p1", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": "pfx:99:snow"})
+for _ in range(100):
+    if len(backgrounds.list_photos(cfg)) > _np: break
+    import time as _t6; _t6.sleep(0.2)
+assert len(backgrounds.list_photos(cfg)) == _np + 1 and backgrounds.list_photos(cfg)[-1][2] == "snow"
+pid = backgrounds.add_photo(cfg, TMP / "photo.jpg", "rain+wind+junk")
+assert dict((i, f) for i, _, f in backgrounds.list_photos(cfg))[pid] == "rain+wind"
+for _fx in _pfx.CHOICES:  # every effect draws frames without errors
+    _sc = _pfx.Scene(TMP / "photo.jpg", _fx, "T", size=(320, 180), duration=10)
+    for _t in (0.0, 3.3):
+        _sc.frame(_t, 0.7)
+job_ph = db.add_job("user", raw_text="p" * 30)
+db.update(job_ph, lyrics="[Verse]\nhi", title="Rain Song", style="s", yt_title="T", yt_description="d",
+          yt_tags=json.dumps(["pop", "love song", "new song 2026", "lyric video", "feel good"]), mp3_path=str(SONG))
+openai_n = len([c for c in calls if "api.openai.com" in c[1]])
+_orig_prender, _orig_pcover = _pfx.render, _pfx.cover_frame
+_pfx.render = lambda audio, out, photo, fx, title="", **k: _orig_prender(audio, out, photo, fx, title, size=(640, 360), max_seconds=3)
+_pfx.cover_frame = lambda out, photo, fx, title="", **k: _orig_pcover(out, photo, fx, title, size=(640, 360))
+db.kv_set(f"bgforce:{job_ph}", f"p{pid}")
+pipe.produce(job_ph)
+assert db.get(job_ph)["status"] == "review" and db.kv_get(f"style:{job_ph}") == "photo:rain+wind", db.kv_get(f"style:{job_ph}")
+assert db.kv_get(f"bg:{job_ph}") == f"p{pid}" and len([c for c in calls if "api.openai.com" in c[1]]) == openai_n
+db.kv_set("bg_mode", "foto")
+db.kv_set(f"bgforce:{job_ph}", "")
+assert pipe._choose_look(job_ph)[0] == "photo"
+_pfx.render, _pfx.cover_frame = _orig_prender, _orig_pcover
+db.update(job_ph, status="failed")
+assert backgrounds.remove_photo(cfg, pid) and pid not in [i for i, _, _ in backgrounds.list_photos(cfg)]
+db.kv_set("bg_mode", "brand")
 # automatic songs ignore the mode and always get a logo background
 for _mode in ("video", "rasm", "aralash"):
     db.kv_set("bg_mode", _mode)

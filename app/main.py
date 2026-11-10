@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from . import backgrounds, brand, scheduler, video
+from . import backgrounds, brand, photofx, scheduler, video
 from .config import Config
 from .claude_api import GENRES, VOICES
 from .db import DB, STOCK_STATUSES
@@ -33,11 +33,12 @@ Tayyor mp3 yuborsangiz (izoh bilan: nomi, janr) — bot muqova+video qilib, tasd
 /bekor <id> — qo'shiqni bekor qilish
 /rasm — tayyor videolarga yangi rasm chizib, videoni qayta yig'ish
 🎞 Fon videolar: botga 10–15 soniyalik videolarni yuboring (Telegram'da "video" qilib, fayl emas). Har qo'shiq uchun ulardan biri tasodifiy tanlanib, qo'shiq tugaguncha takrorlanadi; ustida qo'shiq nomi va vizualizatsiya bo'ladi.
+🖼 Fon rasm: botga rasm yuboring ("fayl" qilib yuborsangiz sifati yuqori bo'ladi) va effektni tanlang: 🌧 yomg'ir, 😢 ko'z yosh, 🌬 shamol, ❄️ qor yoki aralash. Rasm tepasida shu ob-havo harakatlanadi. Qo'shiqqa 🎞 Fon tanlash → 🖼 orqali qo'yiladi.
 /tayyor — yuborilgan videolarni bitta fon qilib saqlash (✅ Tayyor tugmasi bilan bir xil)
 /fon_qosh 1 2 — allaqachon saqlangan fonlarni bitta qilib birlashtirish
 /fonlar — saqlangan fon videolar ro'yxati
-/fon_ochir <id> — fon videoni o'chirish
-/fon_rejim video|rasm — fon: sizning videolaringiz yoki AI rasm
+/fon_ochir <id> — fon videoni o'chirish (rasm: /fon_ochir p1)
+/fon_rejim video|rasm|foto — fon: sizning videolaringiz, AI rasm yoki rasmlaringiz (foto)
 /toxtat — avtomatik ishlashni to'xtatish (yaratish va joylash)
 /davom — qayta yoqish"""
 
@@ -249,7 +250,7 @@ class Bot:
             self.tg.send(f"#{job_id} ni boshqacha qilib bo'lmaydi.", chat_id)
             return
         back = job["status"]
-        self.tg.send(f"🔄 #{job_id}: " + ((f"🎨 {bg_id[1:]}-fon bilan" if str(bg_id).startswith("b") else f"fon #{bg_id} bilan") if bg_id else "yangi fon va uslub bilan")
+        self.tg.send(f"🔄 #{job_id}: " + ((f"🎨 {bg_id[1:]}-fon bilan" if str(bg_id).startswith("b") else (f"🖼 {bg_id.upper()} rasm bilan" if str(bg_id).startswith("p") else f"fon #{bg_id} bilan")) if bg_id else "yangi fon va uslub bilan")
                      + " qayta yig'ilmoqda (1–3 daqiqa)...", chat_id)
         with self.produce_lock:
             try:
@@ -280,6 +281,12 @@ class Bot:
             target = self.merge_finish if data == "mg:done" else self.merge_cancel
             threading.Thread(target=target, args=(chat_id,), daemon=True).start()
             return
+        if data.startswith("pfx:"):
+            _, raw_n, fx = (data.split(":") + ["", ""])[:3]
+            self.tg.answer_callback(cb["id"], "Saqlanmoqda...")
+            if raw_n.isdigit():
+                threading.Thread(target=self.photo_effect_chosen, args=(int(raw_n), fx, chat_id), daemon=True).start()
+            return
         if data.startswith("bgs:") or data.startswith("bgp:"):
             parts = data.split(":")
             job = self.db.get(int(parts[1])) if len(parts) > 1 and parts[1].isdigit() else None
@@ -287,6 +294,7 @@ class Bot:
                 self.tg.answer_callback(cb["id"], "Bu videoni endi o'zgartirib bo'lmaydi.")
                 return
             items = backgrounds.list_all(self.cfg)
+            photos = backgrounds.list_photos(self.cfg)
             if parts[0] == "bgs":
                 self.tg.answer_callback(cb["id"], "Fonlar")
                 now = self.db.kv_get(f"bg:{job['id']}", "")
@@ -304,12 +312,24 @@ class Bot:
                         rows.append(row); row = []
                 if row:
                     rows.append(row)
+                row = []
+                for i, _, fx in photos:  # the owner's pictures with weather effects
+                    row.append((("✔ " if now == f"p{i}" else "") + f"🖼 P{i} {photofx.label(fx).split()[0]}", f"bgp:{job['id']}:p{i}"))
+                    if len(row) == 3:
+                        rows.append(row); row = []
+                if row:
+                    rows.append(row)
                 rows.append([("🎲 Tasodifiy", f"bgp:{job['id']}:0")])
-                shown = brand.THEME_NAMES[int(now[1:]) - 1] if now.startswith("b") and now[1:].isdigit() else (f"klip #{now}" if now else "—")
-                self.tg.send_buttons(f"🎨 #{job['id']} uchun qaysi fon? 🎨 = logo + doira spektr, 🎞 = sizning klipingiz (hozirgi: {shown})", rows, chat_id)
+                shown = brand.THEME_NAMES[int(now[1:]) - 1] if now.startswith("b") and now[1:].isdigit() else (f"rasm {now.upper()}" if now.startswith("p") else (f"klip #{now}" if now else "—"))
+                self.tg.send_buttons(f"🎨 #{job['id']} uchun qaysi fon? 🎨 = logo + doira spektr, 🎞 = sizning klipingiz, 🖼 = rasm + ob-havo (hozirgi: {shown})", rows, chat_id)
                 return
             token = parts[2] if len(parts) > 2 else "0"
             if token.startswith("b") and token[1:].isdigit() and 1 <= int(token[1:]) <= brand.THEME_COUNT:
+                bg_id = token
+            elif token.startswith("p") and token[1:].isdigit():
+                if int(token[1:]) not in {i for i, _, _ in photos}:
+                    self.tg.answer_callback(cb["id"], "Bu rasm topilmadi.")
+                    return
                 bg_id = token
             elif token.isdigit():
                 bg_id = int(token) or None
@@ -496,6 +516,53 @@ class Bot:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def photo_received(self, pic: dict, chat_id: int) -> None:
+        """Owner sent a picture: ask which weather to animate over it, then save it as a background."""
+        if int(pic.get("file_size") or 0) > 20 * 1024 * 1024:
+            self.tg.send("⚠️ Rasm 20 MB dan katta. Kichikroq qilib yuboring.", chat_id)
+            return
+        n = int(self.db.kv_get("photo_pending_n", "0") or 0) + 1
+        self.db.kv_set("photo_pending_n", str(n))
+        try:
+            self.tg.download_file(pic["file_id"], self.merge_dir() / f"pending_{n}.img")
+        except Exception as exc:
+            log.exception("photo download failed")
+            self.tg.send(f"⚠️ Rasmni olib bo'lmadi: {str(exc)[:300]}", chat_id)
+            return
+        rows, row = [], []
+        for fx in photofx.CHOICES:
+            row.append((photofx.label(fx), f"pfx:{n}:{fx}"))
+            if len(row) == 2:
+                rows.append(row); row = []
+        if row:
+            rows.append(row)
+        rows.append([("🗑 Bekor", f"pfx:{n}:x")])
+        self.tg.send_buttons("🖼 Rasm qabul qilindi. Ustida qanday effekt harakatlansin?", rows, chat_id)
+
+    def photo_effect_chosen(self, n: int, fx: str, chat_id: int) -> None:
+        src = self.merge_dir() / f"pending_{n}.img"
+        if fx == "x" or not src.exists():
+            src.unlink(missing_ok=True)
+            self.tg.send("Bekor qilindi." if fx == "x" else "Bu rasm topilmadi, qayta yuboring.", chat_id)
+            return
+        try:
+            pid = backgrounds.add_photo(self.cfg, src, fx)
+            src.unlink(missing_ok=True)
+        except Exception as exc:
+            log.exception("photo save failed")
+            self.tg.send(f"⚠️ Rasmni saqlab bo'lmadi: {str(exc)[:300]}", chat_id)
+            return
+        try:  # a sample frame of the finished look (best effort: the picture is already saved)
+            still = self.merge_dir() / f"photo_{pid}_still.png"
+            path = dict((i, pth) for i, pth, _ in backgrounds.list_photos(self.cfg))[pid]
+            photofx.cover_frame(still, path, photofx.normalise(fx))
+            self.tg.send_document(still, f"🖼 P{pid}: {photofx.label(photofx.normalise(fx))} (namuna kadr)", chat_id)
+            still.unlink(missing_ok=True)
+        except Exception:
+            log.warning("photo sample frame not sent", exc_info=True)
+        self.tg.send(f"✅ 🖼 P{pid} saqlandi ({photofx.label(photofx.normalise(fx))}).\n"
+                     f"Qo'shiq tayyor bo'lgach 🎞 Fon tanlash → 🖼 P{pid} ni bosing, yoki hamma qo'shiqlarga: /fon_rejim foto", chat_id)
+
     def merge_collect(self, media: dict, chat_id: int) -> None:
         """Owner sent a clip: keep it aside; when they press Tayyor all clips become ONE background."""
         if int(media.get("file_size") or 0) > 20 * 1024 * 1024:
@@ -601,6 +668,10 @@ class Bot:
         if media:
             self.merge_collect(media, chat_id)
             return
+        pic = (msg.get("photo") or [None])[-1] or (doc if str(doc.get("mime_type", "")).startswith("image/") else None)
+        if pic:
+            threading.Thread(target=self.photo_received, args=(pic, chat_id), daemon=True).start()
+            return
         audio = msg.get("audio") or (doc if str(doc.get("mime_type", "")).startswith("audio/") else None)
         if audio:
             threading.Thread(target=self.add_uploaded_song, args=(audio, (msg.get("caption") or "").strip(), chat_id),
@@ -649,26 +720,33 @@ class Bot:
                     self.tg.send("Foydalanish: /bekor <id>", chat_id)
             elif cmd == "/fonlar":
                 items = backgrounds.list_all(self.cfg)
+                photos = backgrounds.list_photos(self.cfg)
                 mode = self.db.kv_get("bg_mode", "brand")
-                if not items:
-                    self.tg.send("Fon video yo'q. 10–15 soniyalik videolarni shu yerga yuboring.", chat_id)
+                if not items and not photos:
+                    self.tg.send("Fon yo'q. 10–15 soniyalik video yoki rasm yuboring.", chat_id)
                 else:
-                    lines = [f"#{i} ({path.stat().st_size / 1e6:.1f} MB)" for i, path in items]
-                    self.tg.send(f"🎞 Fon videolar: {len(items)} ta (rejim: {mode})\n" + "\n".join(lines)
-                                 + "\n\nO'chirish: /fon_ochir <id>", chat_id)
+                    lines = [f"🎞 #{i} ({path.stat().st_size / 1e6:.1f} MB)" for i, path in items]
+                    lines += [f"🖼 P{i} — {photofx.label(fx)}" for i, _, fx in photos]
+                    self.tg.send(f"Fonlar: {len(items)} video, {len(photos)} rasm (rejim: {mode})\n" + "\n".join(lines)
+                                 + "\n\nO'chirish: /fon_ochir <id> (rasm: /fon_ochir p1)", chat_id)
             elif cmd == "/fon_ochir":
-                ok = arg.isdigit() and backgrounds.remove(self.cfg, int(arg))
-                self.tg.send(f"🗑 Fon #{arg} o'chirildi." if ok else "Topilmadi. Foydalanish: /fon_ochir <id>", chat_id)
+                a = arg.lower()
+                if a.startswith("p") and a[1:].isdigit():
+                    ok = backgrounds.remove_photo(self.cfg, int(a[1:]))
+                else:
+                    ok = a.isdigit() and backgrounds.remove(self.cfg, int(a))
+                self.tg.send(f"🗑 Fon {arg} o'chirildi." if ok else "Topilmadi. Foydalanish: /fon_ochir <id> (rasm: /fon_ochir p1)", chat_id)
             elif cmd == "/fon_rejim":
                 names = {"brand": "Fon: logo + doira spektr, 11 xil animatsion fon 🎨",
                          "video": "Fon: faqat sizning klip videolaringiz 🎞 (ustida bitta chiziq)",
                          "aralash": "Fon: logo-spektr va sizning kliplaringiz tasodifiy aralash 🎲",
-                         "rasm": "Fon: AI chizgan rasm 🖼"}
+                         "rasm": "Fon: AI chizgan rasm 🖼",
+                         "foto": "Fon: sizning rasmlaringiz + ob-havo effekti (yomg'ir, qor...) 🌧"}
                 if arg in names:
                     self.db.kv_set("bg_mode", arg)
                     self.tg.send(names[arg], chat_id)
                 else:
-                    self.tg.send("Foydalanish: /fon_rejim brand (logo + doira, 11 fon) | video (klipingiz) | aralash | rasm", chat_id)
+                    self.tg.send("Foydalanish: /fon_rejim brand (logo + doira, 11 fon) | video (klipingiz) | foto (rasmlaringiz) | aralash | rasm", chat_id)
             elif cmd == "/eksport":
                 target = int(arg) if arg.isdigit() else None
                 if target:

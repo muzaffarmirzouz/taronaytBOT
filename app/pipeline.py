@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import backgrounds, brand, claude_api, images, mureka, video, youtube
+from . import backgrounds, brand, claude_api, images, mureka, photofx, video, youtube
 
 log = logging.getLogger("pipeline")
 
@@ -98,6 +98,10 @@ class Pipeline:
         if forced.startswith("b") and forced[1:].isdigit() and 1 <= int(forced[1:]) <= brand.THEME_COUNT:
             self.db.kv_set(f"bg:{job_id}", forced)
             return ("brand", int(forced[1:]))
+        photos = {i: (path, fx) for i, path, fx in backgrounds.list_photos(self.cfg)}
+        if forced.startswith("p") and forced[1:].isdigit() and int(forced[1:]) in photos:
+            self.db.kv_set(f"bg:{job_id}", forced)
+            return ("photo", photos[int(forced[1:])])
         if forced.isdigit():  # the owner chose this clip for this song
             for bg_id, path in clips:
                 if bg_id == int(forced):
@@ -105,6 +109,12 @@ class Pipeline:
                     return ("clip", path)
         if mode == "rasm":
             return None
+        if mode == "foto":
+            ph = backgrounds.pick_photo(self.cfg)
+            if ph:
+                self.db.kv_set(f"bg:{job_id}", f"p{ph[0]}")
+                return ("photo", (ph[1], ph[2]))
+            mode = "brand"
         use_brand = mode == "brand" or (mode == "aralash" and (not clips or random.random() < 0.5))
         if use_brand:
             options = [n for n in range(1, brand.THEME_COUNT + 1) if f"b{n}" != prev]
@@ -182,11 +192,14 @@ class Pipeline:
         look = self._choose_look(job_id) if (needs_image or needs_video) else None
         bg = look[1] if look and look[0] == "clip" else None
         theme = look[1] if look and look[0] == "brand" else None
+        photo = look[1] if look and look[0] == "photo" else None  # (path, effects)
         if (needs_image or needs_video) and not look:
             self.db.kv_set(f"bg:{job_id}", "")
 
         if needs_image:
-            if theme:
+            if photo:
+                photofx.cover_frame(image, photo[0], photo[1], "")  # thumbnail source: the photo with its weather
+            elif theme:
                 brand.cover_frame(image, theme, "")  # thumbnail source: logo + spectrum on the theme
             elif bg:
                 video.frame_from(bg, image)  # thumbnail source; no image-generation cost
@@ -205,7 +218,10 @@ class Pipeline:
 
         if needs_video:
             prev = self.db.kv_get(f"style:{job_id}", "")
-            if theme:
+            if photo:
+                style = "photo:" + photo[1]
+                photofx.render(Path(job["mp3_path"]), mp4, photo[0], photo[1], job["title"])
+            elif theme:
                 style = f"brand{theme}"
                 brand.render(Path(job["mp3_path"]), mp4, theme, job["title"])
             elif bg:
