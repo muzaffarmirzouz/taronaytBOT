@@ -27,6 +27,8 @@ def generate(cfg, lyrics: str, style: str) -> dict:
     body = {"lyrics": lyrics, "model": cfg.mureka_model, "prompt": style}
     if cfg.mureka_n:
         body["n"] = cfg.mureka_n  # fewer songs per request = cheaper
+    if getattr(cfg, "mureka_vocal_id", ""):
+        body["vocal_id"] = cfg.mureka_vocal_id  # sing with one fixed voice (own / licensed) in every song
     url = f"{cfg.mureka_base}/v1/song/generate"
     resp = net.request("POST", url, headers=_headers(cfg), json=body, timeout=90)
     if resp.status_code == 400 and "n" in body:

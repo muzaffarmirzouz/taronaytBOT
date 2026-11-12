@@ -28,6 +28,7 @@ class Config:
     mureka_key: str
     mureka_base: str
     mureka_model: str
+    mureka_vocal_id: str
     mureka_n: int
     anthropic_key: str
     claude_model: str
@@ -58,6 +59,7 @@ class Config:
             mureka_key=_env("MUREKA_API_KEY"),
             mureka_base=_env("MUREKA_BASE_URL", "https://api.mureka.ai").rstrip("/"),
             mureka_model=_env("MUREKA_MODEL", "auto"),
+            mureka_vocal_id=_env("MUREKA_VOCAL_ID", ""),  # optional: a cloned/own vocal from the Mureka platform
             mureka_n=_int("MUREKA_N", 1),  # 1 song per request = half the cost of the default 2
             anthropic_key=_env("ANTHROPIC_API_KEY"),
             claude_model=_env("CLAUDE_MODEL", "claude-sonnet-5-5"),
