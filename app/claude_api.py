@@ -230,8 +230,46 @@ def owner_lyrics(raw_text: str) -> str:
     return "\n".join(lines).strip()
 
 
+_EN_WORDS = frozenset(
+    "the and you your my me i we us is are am was were be been to of in on it its that this with for but not "
+    "don won can all just like love heart night day know feel never always time again away down up out come go "
+    "let make take when where what why how now more every some there here oh yeah baby girl boy light dream hold "
+    "stay run fall rise so if no yes they them he she will would could should have has had do does did get got "
+    "say said see saw want need give gave keep keeps only still even from into over under through about".split())
+_UZ_WORDS = frozenset(
+    "bir men sen biz siz ular bu shu va bilan uchun meni seni mening sening bizning yurak sevgi yor kun tun "
+    "hayot qalb dil kel ket bor emas ham lekin ammo faqat yana hech qanday nima qachon qayer juda yaxshi "
+    "sevaman orzu umid armon baxt dard osmon quyosh yulduz shamol kabi qalbim yorim jonim mayli qara ayt "
+    "yana nega kimdir doim hamma boshqa yurak yurakda yurakni kuy qo'shiq".split())
+# strong Uzbek endings only: nothing that an ordinary English word also ends with
+_UZ_SUFFIXES = ("ning", "lar", "larim", "miz", "ngiz", "dan", "gan", "yapti", "moqda", "ladi", "adi", "ydi",
+                "imni", "ingni", "sizni", "lardan", "larga")
+
+
+def detect_language(text: str) -> str:
+    """'en', 'uz', or '' when it is unclear. Used only to see whether the owner's text is already in the chosen language."""
+    words = _words(text)
+    if not words:
+        return ""
+    en = sum(1 for w in words if w in _EN_WORDS)
+    uz = sum(1 for w in words if w in _UZ_WORDS)
+    uz += sum(1 for w in words if len(w) > 4 and w.endswith(_UZ_SUFFIXES))
+    uz += 2 * len(re.findall(r"[oOgG]['\u02bb\u02bc\u2018\u2019]", text))  # o' and g' are Uzbek-only
+    if en > uz:
+        return "en"
+    if uz > en:
+        return "uz"
+    return ""
+
+
 def is_verbatim(raw_text: str, language: str) -> bool:
-    return bool(raw_text.strip()) and language in VERBATIM_LANGS
+    """The owner's words are sung untouched only when the text is ALREADY in the language he picked."""
+    if not raw_text.strip() or language not in VERBATIM_LANGS:
+        return False
+    found = detect_language(raw_text)
+    if language == "en":
+        return found == "en"  # an Uzbek poem + English chosen has to be rewritten in English, not sung in Uzbek
+    return found != "en"  # Uzbek chosen: keep his words unless the text is plainly English
 
 
 def _words(text: str) -> list:

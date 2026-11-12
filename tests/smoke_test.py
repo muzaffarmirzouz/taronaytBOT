@@ -467,6 +467,19 @@ mureka.generate(_cfg_ws, "[Verse]\nhello", "female duet pop")
 assert "gender" not in json.loads([c for c in calls if c[0] == "WS_BODY"][-1][1])
 assert "WAVESPEED_API_KEY" in _dc.replace(cfg, song_provider="wavespeed", wavespeed_key="").missing()
 
+# language choice beats "sing it verbatim": an Uzbek poem + English chosen must be rewritten in English
+_uz_poem = "Yuragimda bir armon bor,\nKo'zlarimda yosh izlari,\nSeni kutib o'tdi yillar."
+_en_poem = "I was walking through the city lights and I never thought that I would lose you tonight."
+assert claude_api.detect_language(_uz_poem) == "uz" and claude_api.detect_language(_en_poem) == "en"
+assert not claude_api.is_verbatim(_uz_poem, "en") and claude_api.is_verbatim(_uz_poem, "uz")
+assert claude_api.is_verbatim(_en_poem, "en") and not claude_api.is_verbatim(_en_poem, "uz")
+assert "Turn it into an ENGLISH song" in claude_api.build_user_message(_uz_poem, "", [], language="en")
+assert "sung EXACTLY as written" in claude_api.build_user_message(_uz_poem, "", [], language="uz")
+assert "sung EXACTLY as written" in claude_api.build_user_message(_en_poem, "", [], language="en")
+_m = claude_api.build_user_message(_en_poem, "", [], language="uz")
+assert "UZBEK" in _m and "sung EXACTLY as written" not in _m
+assert "TURKISH" in claude_api.build_user_message(_uz_poem, "", [], language="tr")
+
 # photo mode: the owner's picture + weather effects (rain, tears, wind, snow)
 from PIL import Image as _PI  # noqa: E402
 from app import photofx as _pfx  # noqa: E402
