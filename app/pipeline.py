@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import random
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import backgrounds, brand, claude_api, images, mureka, photofx, video, youtube
+from . import backgrounds, brand, claude_api, djedit, images, mureka, photofx, pubfile, video, youtube
 
 log = logging.getLogger("pipeline")
 
@@ -136,6 +137,55 @@ class Pipeline:
             self.db.kv_set(f"voice:{job_id}", voice)
         return voice
 
+    def _remix_ids(self, job_id: int):
+        """A remix job points at an existing mp3: hand it to the generator and get the id it should follow."""
+        src = self.db.kv_get(f"remix_src:{job_id}", "")
+        if not src or not Path(src).exists():
+            return "", ""
+        kind = self.db.kv_get(f"remix_kind:{job_id}", "melody")
+        known = self.db.kv_get(f"remix_upload:{job_id}", "")  # already uploaded on an earlier attempt
+        if known:
+            return (known, "") if kind == "melody" else ("", known)
+        url = self.db.kv_get(f"remix_url:{job_id}", "") or pubfile.publish(src)
+        if not url:
+            raise RuntimeError("Remiks uchun ochiq havola yo'q: Railway'da Settings → Networking → Generate Domain "
+                               "ni bosing yoki PUBLIC_BASE_URL ni qo'ying.")
+        try:
+            upload_id = mureka.upload_audio(self.cfg, url, kind)
+        finally:
+            pubfile.withdraw(url)
+        self.db.kv_set(f"remix_upload:{job_id}", upload_id)
+        return (upload_id, "") if kind == "melody" else ("", upload_id)
+
+    def add_remix_job(self, src_mp3, kind: str = "melody", lyrics: str = "", genre: str = "",
+                      language: str = "en", raw_text: str = "", theme: str = "") -> int:
+        """A new song that follows an existing recording's melody (or its sound, with kind='reference')."""
+        job_id = self.db.add_job("user", raw_text or lyrics, theme, status="pending")
+        folder = self.job_dir(job_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        kept = folder / "source.mp3"
+        if Path(src_mp3).resolve() != kept.resolve():
+            shutil.copy(src_mp3, kept)
+        self.db.kv_set(f"remix_src:{job_id}", str(kept))
+        self.db.kv_set(f"remix_kind:{job_id}", kind)
+        self.db.kv_set(f"lang:{job_id}", language)
+        if genre:
+            self.db.kv_set(f"genre:{job_id}", genre)
+        self.db.update(job_id, status="queued")
+        return job_id
+
+    def add_dj_job(self, src_mp3, style: str = "club", title: str = "", hint: str = "") -> dict:
+        """Free club edit: no generator, no cost. Returns {"job_id", ...what the edit did}."""
+        job_id = self.db.add_job("user", hint, "", status="pending")
+        folder = self.job_dir(job_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        info = djedit.remix(Path(src_mp3), folder / "song.mp3", style)
+        name = f"{title} ({info['label'].split()[-1]} Remix)" if title else ""
+        self.db.update(job_id, title=name[:45], style="__upload__", mp3_path=str(folder / "song.mp3"), lyrics="")
+        self.db.update(job_id, status="queued")
+        info["job_id"] = job_id
+        return info
+
     def produce(self, job_id: int, style: str | None = None) -> None:
         job = self.db.get(job_id)
         self.db.update(job_id, status="producing", error="")
@@ -171,7 +221,8 @@ class Pipeline:
         mp3 = folder / "song.mp3"
         if not (job["mp3_path"] and Path(job["mp3_path"]).exists()):
             self._check_budget(job["source"])
-            result = mureka.generate(self.cfg, job["lyrics"], job["style"])
+            melody_id, reference_id = self._remix_ids(job_id)
+            result = mureka.generate(self.cfg, job["lyrics"], job["style"], melody_id, reference_id)
             self._count_mureka()
             mureka.download(result["url"], mp3)
             try:  # light mastering: even loudness, tighter low end; the untouched file is kept as song_raw.mp3

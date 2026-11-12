@@ -60,6 +60,12 @@ class Resp:
 def fake_request(method, url, **kw):
     calls.append((method, url))
     if "api.wavespeed.ai" in url:
+        if "create-upload-id" in url:
+            calls.append(("WS_UPLOAD", json.dumps(kw["json"])))
+            return Resp(js={"code": 200, "data": {"id": "up1", "status": "created"}})
+        if "/predictions/up1/" in url:
+            return Resp(js={"code": 200, "data": {"id": "up1", "status": "completed",
+                                                  "outputs": [{"melody_id": "mel-42", "purpose": "melody"}]}})
         if method == "POST":
             assert kw["headers"]["Authorization"] == "Bearer wk" and kw["json"]["lyrics"] and kw["json"].get("gender") in (None, "male", "female")
             calls.append(("WS_BODY", json.dumps(kw["json"])))
@@ -77,7 +83,7 @@ def fake_request(method, url, **kw):
             return Resp(js={"id": "task1", "status": "running"})
         return Resp(js={"id": "task1", "status": "succeeded",
                         "choices": [{"url": "https://cdn.example/song.mp3", "duration": 6000}]})
-    if url == "https://cdn.example/song.mp3":
+    if url in ("https://cdn.example/song.mp3", "https://cdn.example/ws1.mp3"):
         return Resp(content=SONG.read_bytes())
     if "api.openai.com" in url:
         return Resp(js={"data": [{"b64_json": base64.b64encode(PNG.read_bytes()).decode()}]})
@@ -353,25 +359,59 @@ _new_id, _ = backgrounds.add(cfg, CLIP)
 assert backgrounds.pick(cfg)[0] == _new_id
 backgrounds.remove(cfg, _new_id)
 
-# owner uploads a finished mp3
+# owner uploads a finished mp3: a menu first, then each of the three routes
 class _TG5:
-    def __init__(self): self.sent = []
+    def __init__(self): self.sent = []; self.rows = []
     def send(self, *a, **k): self.sent.append(a)
+    def send_buttons(self, text, rows, chat_id=None): self.rows = rows; self.sent.append((text,))
+    def answer_callback(self, *a, **k): pass
     def download_file(self, file_id, dest): shutil.copy(LONG, dest)
 _old5 = bot.tg; bot.tg = _TG5(); bot.wake = _th.Event()
 _mureka_calls = len([c for c in calls if "mureka" in c[1]])
 bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "audio": {"file_id": "a1", "file_size": 900_000, "title": "Night Ride"},
             "caption": "Night Ride\nclub house, dark and driving"})
+for _ in range(150):
+    if bot.tg.rows: break
+    import time as _t5; _t5.sleep(0.1)
+_actions = [b[1] for row in bot.tg.rows for b in row]
+assert any(a.endswith(":video") for a in _actions) and any(a.endswith(":ai") for a in _actions) \
+    and any(a.endswith(":dj_club") for a in _actions), _actions
+_n = int(_actions[0].split(":")[1])
+assert not [r for r in db.recent(5) if r["style"] == "__upload__"]  # nothing happens until he picks
+
+# 1) plain video, as before: no song generation, no cost
+bot.audio_action(_n, "video", 1)
 _up = [r for r in db.recent(5) if r["style"] == "__upload__"]
-for _ in range(100):
-    if _up: break
-    import time as _t5; _t5.sleep(0.1); _up = [r for r in db.recent(5) if r["style"] == "__upload__"]
 assert _up and _up[0]["status"] == "queued" and _up[0]["title"] == "Night Ride", _up
 pipe.produce(_up[0]["id"])
 _uj = db.get(_up[0]["id"])
 assert _uj["status"] == "review" and _uj["yt_title"] and _uj["mp4_path"], _uj["status"]
-assert len([c for c in calls if "mureka" in c[1]]) == _mureka_calls  # no song generation, no cost
+assert len([c for c in calls if "mureka" in c[1]]) == _mureka_calls
 db.update(_uj["id"], status="failed")
+
+# 2) free DJ edit: a new job with its own mp3, still no generator call
+_dj_before = len([c for c in calls if "wavespeed" in c[1]])
+_dj = pipe.add_dj_job(bot.pending_audio(_n), "club", "Night Ride")
+assert _dj["bpm"] > 0 and db.get(_dj["job_id"])["style"] == "__upload__"
+assert Path(db.get(_dj["job_id"])["mp3_path"]).exists()
+assert len([c for c in calls if "wavespeed" in c[1]]) == _dj_before  # free
+db.update(_dj["job_id"], status="failed")
+
+# 3) AI remix: the source is uploaded once and its id rides along with the song request
+import dataclasses as _dc2  # noqa: E402
+_pipe_ws = type(pipe)(_dc2.replace(cfg, song_provider="wavespeed", wavespeed_key="wk"), db, lambda *a, **k: None)
+_rx = _pipe_ws.add_remix_job(bot.pending_audio(_n), "melody", genre="club", language="en", raw_text="night drive")
+assert db.kv_get(f"remix_kind:{_rx}") == "melody" and Path(db.kv_get(f"remix_src:{_rx}")).exists()
+os.environ["PUBLIC_BASE_URL"] = "http://127.0.0.1:8111"
+os.environ["PORT"] = "8111"
+_pipe_ws.produce(_rx)
+assert db.get(_rx)["status"] == "review", db.get(_rx)["error"]
+assert json.loads([c for c in calls if c[0] == "WS_BODY"][-1][1])["melody_id"] == "mel-42"
+assert db.kv_get(f"remix_upload:{_rx}") == "mel-42"
+_ws_up = json.loads([c for c in calls if c[0] == "WS_UPLOAD"][-1][1])
+assert _ws_up["purpose"] == "melody" and _ws_up["audio"].startswith("http://127.0.0.1:8111/f/")
+db.update(_rx, status="failed")
+bot.pending_audio(_n).unlink(missing_ok=True)
 bot.tg = _old5
 
 # collect mode: videos wait, Tayyor joins them into ONE background

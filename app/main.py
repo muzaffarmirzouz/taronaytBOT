@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import sys
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import backgrounds, brand, photofx, scheduler, video
+from . import backgrounds, brand, djedit, photofx, pubfile, scheduler, video
 from .config import Config
 from .claude_api import GENRES, VOICES
 from .db import DB, STOCK_STATUSES
@@ -24,7 +26,7 @@ Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot tilni (🇺🇿 o'zbekcha / �
 
 /holat — navbat, keyingi joylash vaqti, bugungi sarf
 /navbat — oxirgi 10 ta qo'shiq
-/eksport <id> — Spotify distribyutori uchun: mp3, kvadrat muqova, matn
+/remiks <id> — o'z qo'shig'ingizni remiks qilish (AI remiks yoki bepul DJ-edit)\n/eksport <id> — Spotify distribyutori uchun: mp3, kvadrat muqova, matn
 Tayyor mp3 yuborsangiz (izoh bilan: nomi, janr) — bot muqova+video qilib, tasdiqlash uchun yuboradi
 /videolar — tayyor/tasdiq kutayotgan videolar ro'yxati; bosib ko'rish (katta videolar past sifatda ko'rsatiladi)
 /yarat [mavzu] — hoziroq yangi qo'shiq yaratish (mavzu ixtiyoriy)
@@ -293,6 +295,18 @@ class Bot:
             target = self.merge_finish if data == "mg:done" else self.merge_cancel
             threading.Thread(target=target, args=(chat_id,), daemon=True).start()
             return
+        if data.startswith("au:"):
+            _, raw_n, action = (data.split(":") + ["", ""])[:3]
+            if not raw_n.isdigit():
+                return
+            n = int(raw_n)
+            if action.startswith("g_"):
+                self.tg.answer_callback(cb["id"], "Boshlandi")
+                threading.Thread(target=self.start_ai_remix, args=(n, action[2:], chat_id), daemon=True).start()
+                return
+            self.tg.answer_callback(cb["id"], "Qabul qilindi")
+            threading.Thread(target=self.audio_action, args=(n, action, chat_id), daemon=True).start()
+            return
         if data.startswith("pfx:"):
             _, raw_n, fx = (data.split(":") + ["", ""])[:3]
             self.tg.answer_callback(cb["id"], "Saqlanmoqda...")
@@ -490,6 +504,120 @@ class Bot:
             log.exception("background upload failed")
             self.tg.send(f"⚠️ Videoni qabul qilib bo'lmadi: {str(exc)[:300]}", chat_id)
 
+    def pending_audio(self, n: int):
+        return self.merge_dir() / f"pending_audio_{n}.mp3"
+
+    def audio_menu(self, n: int, title: str, chat_id: int, extra: str = "") -> None:
+        rows = [[("📥 Shunchaki video qil", f"au:{n}:video")],
+                [("🎛 AI remiks (kuyni saqlab)", f"au:{n}:ai")],
+                [(djedit.STYLES["club"]["label"] + " DJ", f"au:{n}:dj_club"),
+                 (djedit.STYLES["slow"]["label"] + " DJ", f"au:{n}:dj_slow"),
+                 (djedit.STYLES["hard"]["label"] + " DJ", f"au:{n}:dj_hard")],
+                [("❌ Bekor", f"au:{n}:x")]]
+        self.tg.send_buttons(f"🎵 {title or 'Audio'} qabul qilindi.{extra}\n\n"
+                             "📥 Video — hozirgidek, qo'shiq o'zgarmaydi (bepul).\n"
+                             "🎛 AI remiks — kuy saqlanadi, aranjirovka, janr va ovoz yangi bo'ladi (~$0.24).\n"
+                             "🪩 DJ — tezlik, bit va klub mixi, SI ishlatilmaydi (bepul).", rows, chat_id)
+
+    def audio_received(self, audio: dict, caption: str, chat_id: int) -> None:
+        """Owner sent a finished track: save it and ask what to do with it."""
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        if int(audio.get("file_size") or 0) > 20 * 1024 * 1024:
+            self.tg.send("⚠️ Audio 20 MB dan katta (Telegram botlar shundan kattasini olmaydi). Qisqaroq yoki siqilgan mp3 yuboring.", chat_id)
+            return
+        n = int(self.db.kv_get("audio_pending_n", "0") or 0) + 1
+        self.db.kv_set("audio_pending_n", str(n))
+        first = caption.splitlines()[0].strip() if caption else ""
+        title = (first if 0 < len(first) <= 45 else "") or (audio.get("title") or "").strip() \
+            or Path(audio.get("file_name") or "").stem.replace("_", " ").strip()
+        self.db.kv_set(f"audio_title:{n}", title[:45])
+        self.db.kv_set(f"audio_hint:{n}", caption[:2000])
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                src = Path(tmp) / "in_audio"
+                self.tg.download_file(audio["file_id"], src)
+                subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-vn", "-c:a", "libmp3lame",
+                                "-b:a", "256k", str(self.pending_audio(n))], check=True, timeout=300)
+        except Exception as exc:
+            log.exception("audio download failed")
+            self.tg.send(f"⚠️ Audioni olib bo'lmadi: {str(exc)[:300]}", chat_id)
+            return
+        if video.probe_duration(self.pending_audio(n)) < 20:
+            self.tg.send("⚠️ Audio juda qisqa (kamida 20 soniya kerak).", chat_id)
+            return
+        self.audio_menu(n, title, chat_id)
+
+    def audio_action(self, n: int, action: str, chat_id: int) -> None:
+        src = self.pending_audio(n)
+        title = self.db.kv_get(f"audio_title:{n}", "")
+        hint = self.db.kv_get(f"audio_hint:{n}", "")
+        if action == "x":
+            src.unlink(missing_ok=True)
+            self.tg.send("Bekor qilindi.", chat_id)
+            return
+        if not src.exists():
+            self.tg.send("Bu audio topilmadi, qayta yuboring.", chat_id)
+            return
+        try:
+            if action == "video":
+                self.add_uploaded_song_file(src, title, hint, chat_id)
+            elif action.startswith("dj_"):
+                style = action[3:]
+                self.tg.send(f"🎚 {djedit.STYLES[style]['label']} remiks tayyorlanmoqda... (1–2 daqiqa, pul sarflanmaydi)", chat_id)
+                info = self.pipeline.add_dj_job(src, style, title, hint)
+                self.wake.set()
+                self.tg.send(f"✅ #{info['job_id']} — {info['label']} remiks tayyor: {info['source_bpm']} → {info['bpm']} BPM. "
+                             f"Video yig'ilgach tasdiqlash uchun yuboraman.", chat_id)
+            elif action == "ai":
+                rows = self.remix_genre_rows(n)
+                self.tg.send_buttons("🎛 AI remiks: kuy saqlanadi, qolgani yangidan yaratiladi. Qaysi janrda bo'lsin?", rows, chat_id)
+                return
+        except Exception as exc:
+            log.exception("audio action %s failed", action)
+            self.tg.send(f"⚠️ Bajarib bo'lmadi: {str(exc)[:400]}", chat_id)
+
+    def remix_genre_rows(self, n: int) -> list:
+        items = [(label, f"au:{n}:g_{key}") for key, (label, _) in GENRES.items()]
+        rows = [items[i:i + 2] for i in range(0, len(items), 2)]
+        rows.append([("❌ Bekor", f"au:{n}:x")])
+        return rows
+
+    def start_ai_remix(self, n: int, genre: str, chat_id: int) -> None:
+        src = self.pending_audio(n)
+        if not src.exists():
+            self.tg.send("Bu audio topilmadi, qayta yuboring.", chat_id)
+            return
+        if self.cfg.song_provider != "wavespeed":
+            self.tg.send("⚠️ AI remiks faqat WaveSpeed orqali ishlaydi. Railway'da SONG_PROVIDER=wavespeed qo'ying.", chat_id)
+            return
+        if not pubfile.available():
+            self.tg.send("⚠️ AI remiks uchun botning ochiq manzili kerak: Railway → Settings → Networking → "
+                         "Generate Domain ni bosing (yoki PUBLIC_BASE_URL ni qo'ying) va qayta urinib ko'ring.", chat_id)
+            return
+        lyrics = self.db.kv_get(f"audio_lyrics:{n}", "")
+        language = self.db.kv_get(f"audio_lang:{n}", "en")
+        job_id = self.pipeline.add_remix_job(src, "melody", lyrics=lyrics, genre=genre, language=language,
+                                             raw_text=lyrics or self.db.kv_get(f"audio_hint:{n}", ""),
+                                             theme=f"{genre}|remix of an existing recording")
+        self.wake.set()
+        self.tg.send(f"🎛 #{job_id} AI remiks navbatga qo'yildi ({GENRES[genre][0] if genre in GENRES else genre}). "
+                     f"Kuy saqlanadi, matn va aranjirovka yangi bo'ladi. 3–6 daqiqa.", chat_id)
+
+    def add_uploaded_song_file(self, src, title: str, hint: str, chat_id: int) -> None:
+        """A finished track becomes a job as it is: cover + video + YouTube text, no song generation."""
+        job_id = self.db.add_job("user", hint or "", "", status="pending")
+        folder = self.pipeline.job_dir(job_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        mp3 = folder / "song.mp3"
+        shutil.copy(src, mp3)
+        self.db.update(job_id, title=title[:45], style="__upload__", mp3_path=str(mp3), lyrics="")
+        self.db.update(job_id, status="queued")
+        self.wake.set()
+        self.tg.send(f"📥 #{job_id} qabul qilindi{(' — ' + title) if title else ''}. Muqova va videoni yig'ib, "
+                     f"tasdiqlash uchun yuboraman (1–3 daqiqa). Qo'shiq yaratishga pul sarflanmaydi.", chat_id)
+
     def add_uploaded_song(self, audio: dict, caption: str, chat_id: int) -> None:
         """Owner sent a finished mp3: make the cover/video + YouTube metadata around it (no song generation)."""
         import subprocess
@@ -686,7 +814,7 @@ class Bot:
             return
         audio = msg.get("audio") or (doc if str(doc.get("mime_type", "")).startswith("audio/") else None)
         if audio:
-            threading.Thread(target=self.add_uploaded_song, args=(audio, (msg.get("caption") or "").strip(), chat_id),
+            threading.Thread(target=self.audio_received, args=(audio, (msg.get("caption") or "").strip(), chat_id),
                              daemon=True).start()
             return
         text = (msg.get("text") or "").strip()
@@ -759,6 +887,21 @@ class Bot:
                     self.tg.send(names[arg], chat_id)
                 else:
                     self.tg.send("Foydalanish: /fon_rejim brand (logo + doira, 11 fon) | video (klipingiz) | foto (rasmlaringiz) | aralash | rasm", chat_id)
+            elif cmd == "/remiks":
+                target = int(arg.split()[0]) if arg.split() and arg.split()[0].isdigit() else None
+                row = self.db.get(target) if target else None
+                if not row or not (row["mp3_path"] and Path(row["mp3_path"]).exists()):
+                    self.tg.send("Foydalanish: /remiks <id> — o'sha qo'shiqni remiks qiladi (id ni /videolar yoki /navbat dan oling).", chat_id)
+                else:
+                    n = int(self.db.kv_get("audio_pending_n", "0") or 0) + 1
+                    self.db.kv_set("audio_pending_n", str(n))
+                    shutil.copy(row["mp3_path"], self.pending_audio(n))
+                    self.db.kv_set(f"audio_title:{n}", (row["title"] or "")[:45])
+                    self.db.kv_set(f"audio_hint:{n}", row["raw_text"] or "")
+                    self.db.kv_set(f"audio_lyrics:{n}", row["lyrics"] or "")
+                    self.db.kv_set(f"audio_lang:{n}", self.db.kv_get(f"lang:{target}", "en"))
+                    self.audio_menu(n, row["title"] or f"#{target}", chat_id,
+                                    extra=f"\n(#{target} — o'zingizning qo'shig'ingiz, matni saqlanadi)")
             elif cmd == "/eksport":
                 target = int(arg) if arg.isdigit() else None
                 if target:
@@ -815,6 +958,7 @@ class Bot:
                 fails = 0
 
     def run(self) -> None:
+        pubfile.start()  # serves a remix source to the generator for a few minutes, nothing else
         threading.Thread(target=self.worker_loop, daemon=True, name="worker").start()
         threading.Thread(target=self.scheduler_loop, daemon=True, name="scheduler").start()
         self.tg.send(f"🤖 Bot ishga tushdi. Joylash vaqtlari ({self.cfg.timezone}): {', '.join(self.cfg.post_times)}\n/help")
