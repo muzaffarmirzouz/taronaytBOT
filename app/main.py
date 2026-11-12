@@ -143,7 +143,7 @@ class Bot:
 
     def check_weekly_mix(self) -> None:
         """Once a week, gather the songs that went out and build one long mix of them."""
-        if self.db.kv_get("mix_weekly", "on") != "on" or self.db.kv_get("mix_busy", "") == "1":
+        if self.db.kv_get("mix_weekly", "on") != "on" or time.time() - float(self.db.kv_get("mix_busy", "0") or 0) < 3600:
             return
         now = datetime.now(self.tz)
         day, hour = int(self.db.kv_get("mix_day", "6")), int(self.db.kv_get("mix_hour", "11"))  # Sunday, 11:00
@@ -160,10 +160,11 @@ class Bot:
         threading.Thread(target=self.build_mix, args=(tracks, None), daemon=True).start()
 
     def build_mix(self, tracks: list, title: str | None) -> None:
-        if self.db.kv_get("mix_busy", "") == "1":
+        started = float(self.db.kv_get("mix_busy", "0") or 0)
+        if time.time() - started < 3600:  # a stale lock from a crash clears itself after an hour
             self.tg.send("🎚 Miks allaqachon yig'ilmoqda, tugashini kuting.")
             return
-        self.db.kv_set("mix_busy", "1")
+        self.db.kv_set("mix_busy", str(time.time()))
         try:
             self.tg.send(f"🎚 {len(tracks)} ta qo'shiqdan uzun miks yig'ilmoqda. Bu 5–20 daqiqa oladi, "
                          f"pul sarflanmaydi. Tayyor bo'lgach tasdiqlash uchun yuboraman.")
@@ -175,7 +176,7 @@ class Bot:
             log.exception("mix failed")
             self.tg.send(f"⚠️ Miks yig'ilmadi: {str(exc)[:400]}")
         finally:
-            self.db.kv_set("mix_busy", "")
+            self.db.kv_set("mix_busy", "0")
 
     def check_slot(self) -> None:
         now = datetime.now(self.tz)
@@ -924,22 +925,30 @@ class Bot:
                     self.tg.send(names[arg], chat_id)
                 else:
                     self.tg.send("Foydalanish: /fon_rejim brand (logo + doira, 11 fon) | video (klipingiz) | foto (rasmlaringiz) | aralash | rasm", chat_id)
-            elif cmd == "/miks":
+            elif cmd in ("/miks", "/mix"):
                 days = int(arg.split()[0]) if arg.split() and arg.split()[0].isdigit() else 7
                 tracks = self.pipeline.mix_sources(days=days)
                 if len(tracks) < 2:
-                    self.tg.send(f"So'nggi {days} kunda miks uchun qo'shiq yo'q (topildi: {len(tracks)}, kamida 2 kerak).\n"
-                                 f"Ko'proq kun uchun: /miks 30", chat_id)
+                    rows = self.db.recent(300)
+                    have = sum(1 for r in rows if r["mp3_path"] and Path(r["mp3_path"]).exists())
+                    kinds = {}
+                    for r in rows:
+                        kinds[r["status"]] = kinds.get(r["status"], 0) + 1
+                    self.tg.send(f"So'nggi {days} kunda miks uchun qo'shiq topilmadi (topildi: {len(tracks)}, kamida 2 kerak).\n"
+                                 f"Bazada {len(rows)} ta yozuv, mp3 fayli borlari: {have}.\n"
+                                 f"Holatlar: {', '.join(f'{k}={v}' for k, v in sorted(kinds.items())) or '—'}\n"
+                                 f"Miks faqat posted/ready/review holatidagi qo'shiqlarni oladi. "
+                                 f"Ko'proq kun uchun: /miks 365", chat_id)
                 else:
                     threading.Thread(target=self.build_mix, args=(tracks, None), daemon=True).start()
-            elif cmd == "/miks_rejim":
+            elif cmd in ("/miks_rejim", "/mix_rejim"):
                 if arg.lower() in ("on", "off"):
                     self.db.kv_set("mix_weekly", arg.lower())
                     self.tg.send(f"🎚 Haftalik avtomatik miks: {'yoqildi (yakshanba 11:00)' if arg.lower() == 'on' else 'o‘chirildi'}", chat_id)
                 else:
                     state = self.db.kv_get("mix_weekly", "on")
                     self.tg.send(f"🎚 Haftalik avtomatik miks hozir: {state}. O'zgartirish: /miks_rejim on | off", chat_id)
-            elif cmd == "/remiks":
+            elif cmd in ("/remiks", "/remix"):
                 target = int(arg.split()[0]) if arg.split() and arg.split()[0].isdigit() else None
                 row = self.db.get(target) if target else None
                 if not row or not (row["mp3_path"] and Path(row["mp3_path"]).exists()):
