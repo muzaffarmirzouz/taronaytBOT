@@ -105,6 +105,16 @@ class Bot:
                     self.tg.send(f"⏸ Kunlik limit: {exc}. Ertaga davom etadi (MAX_MUREKA_PER_DAY ni o'zgartirish mumkin).")
                 self.stop.wait(1800)
             except Exception as exc:
+                if "exceeded your current quota" in str(exc) or "check your plan and billing" in str(exc):
+                    # Mureka account out of credit: not the song's fault, so don't burn its 3 attempts
+                    self.db.update(job["id"], status="queued")
+                    if self.db.kv_get("mureka_quota_notified") != time.strftime("%Y-%m-%d-%H"):
+                        self.db.kv_set("mureka_quota_notified", time.strftime("%Y-%m-%d-%H"))
+                        self.tg.send("⛔ Mureka: kredit/limit tugagan (429 \"exceeded your current quota\"). Platform.mureka.ai → "
+                                     "Billing'da hisobni to'ldiring yoki tarifni tekshiring. Qo'shiqlar navbatda saqlanadi, "
+                                     "kredit paydo bo'lgach bot o'zi davom etadi (har 30 daqiqada tekshiradi).")
+                    self.stop.wait(1800)
+                    return
                 log.exception("job %s failed", job["id"])
                 attempts = (job.get("attempts") or 0) + 1
                 final = attempts >= 3
