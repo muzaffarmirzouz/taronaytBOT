@@ -594,8 +594,19 @@ assert abs(_info["duration"] - _expect) < 1.5, (_info["duration"], _expect)
 assert abs(video.probe_duration(Path(_mj["mp4_path"])) - _info["duration"]) < 1.5
 assert "Tracklist:" in _mj["yt_description"] and "0:00 Track 1" in _mj["yt_description"]
 assert len(calls) == _mix_calls  # a mix costs nothing: no generator, no Claude, no image API
-assert pipe.mix_sources(days=7) and all(Path(p).exists() for _, p in pipe.mix_sources(days=7))
+assert pipe.mix_sources(days=7) and all(Path(t[1]).exists() for t in pipe.mix_sources(days=7))
 assert not pipe.mix_sources(days=0)
+# songs already used are skipped next time, and a mix never feeds another mix
+_src = pipe.mix_sources(days=9999, reuse=True)
+assert _info["job_id"] not in [t[2] for t in _src], "a mix must not be a source for the next one"
+_pick = _src[:2]
+_info2 = pipe.add_mix_job([(t[0], t[1], t[2]) for t in _pick], "Used Test")
+_left = [t[2] for t in pipe.mix_sources(days=9999)]
+assert all(t[2] not in _left for t in _pick), _left
+assert all(t[2] in [x[2] for x in pipe.mix_sources(days=9999, reuse=True)] for t in _pick)
+_c = pipe.mix_candidates(9999)
+assert _c["used"] >= 2 and _c["with_used"] > _c["fresh"]
+db.update(_info2["job_id"], status="failed")
 db.update(_info["job_id"], status="failed")
 backgrounds.remove_photo(cfg, _pid2)
 _B.render, _PF.render, _LM.LOOP_SECONDS = _ob, _op, _ol

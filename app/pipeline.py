@@ -190,14 +190,31 @@ class Pipeline:
         info["job_id"] = job_id
         return info
 
-    def mix_sources(self, days: int = 7, limit: int = 40) -> list:
-        """The songs a mix is built from: what went out (or is ready) in the last week, oldest first."""
+    def mix_sources(self, days: int = 7, limit: int = 40, reuse: bool = False) -> list:
+        """The songs a mix is built from: what went out (or is ready) in the window, oldest first.
+
+        Songs that already went into a mix are left out unless reuse is asked for, and a mix is never a source
+        for another mix. Returns [(title, mp3_path, job_id)]."""
         cutoff = time.time() - days * 86400
-        rows = [r for r in self.db.recent(300)
-                if r["status"] in ("posted", "ready", "review") and r["mp3_path"]
-                and Path(r["mp3_path"]).exists() and float(r["created_at"] or 0) >= cutoff]
-        rows.sort(key=lambda r: float(r["created_at"] or 0))
-        return [(r["title"] or f"#{r['id']}", Path(r["mp3_path"])) for r in rows[-limit:]]
+        out = []
+        for r in self.db.recent(300):
+            if r["theme"] == "mix" or r["status"] not in ("posted", "ready", "review"):
+                continue
+            if not (r["mp3_path"] and Path(r["mp3_path"]).exists()):
+                continue
+            if float(r["created_at"] or 0) < cutoff:
+                continue
+            if not reuse and self.db.kv_get(f"mixed:{r['id']}", ""):
+                continue
+            out.append((r["title"] or f"#{r['id']}", Path(r["mp3_path"]), r["id"]))
+        out.sort(key=lambda t: t[2])
+        return out[-limit:]
+
+    def mix_candidates(self, days: int = 7) -> dict:
+        """Why a mix did or did not come together, for the message back to the owner."""
+        fresh = self.mix_sources(days=days)
+        all_ok = self.mix_sources(days=days, reuse=True)
+        return {"fresh": len(fresh), "with_used": len(all_ok), "used": len(all_ok) - len(fresh)}
 
     def mix_looks(self) -> list:
         """Every background a mix may show: the 11 logo themes and all of the owner's photo scenes."""
@@ -212,8 +229,11 @@ class Pipeline:
         folder = self.job_dir(job_id)
         folder.mkdir(parents=True, exist_ok=True)
         name = title or f"{len(tracks)} Songs · Chill Mix"
-        info = longmix.build(tracks, self.mix_looks(), folder / "video.mp4", folder / "work",
+        info = longmix.build([(t[0], t[1]) for t in tracks], self.mix_looks(), folder / "video.mp4", folder / "work",
                              cover_path=folder / "cover.png", title=name, progress=progress)
+        for t in tracks:  # these are spent now: the next mix starts from newer songs
+            if len(t) > 2:
+                self.db.kv_set(f"mixed:{t[2]}", str(job_id))
         self.db.update(
             job_id, title=name[:45], style="__upload__", lyrics="[mix]",
             mp3_path=str(info["mp3"]), mp4_path=str(folder / "video.mp4"), image_path=str(folder / "cover.png"),

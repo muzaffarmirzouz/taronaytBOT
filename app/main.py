@@ -26,7 +26,7 @@ Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot tilni (🇺🇿 o'zbekcha / �
 
 /holat — navbat, keyingi joylash vaqti, bugungi sarf
 /navbat — oxirgi 10 ta qo'shiq
-/miks [kun] — so'nggi qo'shiqlardan uzun miks yig'ish (haftada bir marta o'zi ham yig'adi, /miks_rejim on|off)\n/remiks <id> — o'z qo'shig'ingizni remiks qilish (AI remiks yoki bepul DJ-edit)\n/eksport <id> — Spotify distribyutori uchun: mp3, kvadrat muqova, matn
+/miks [kun] — so'nggi qo'shiqlardan uzun miks (bir marta ishlatilgani qayta tushmaydi; /miks 30 hammasi — qayta ishlatadi) (haftada bir marta o'zi ham yig'adi, /miks_rejim on|off)\n/remiks <id> — o'z qo'shig'ingizni remiks qilish (AI remiks yoki bepul DJ-edit)\n/eksport <id> — Spotify distribyutori uchun: mp3, kvadrat muqova, matn
 Tayyor mp3 yuborsangiz (izoh bilan: nomi, janr) — bot muqova+video qilib, tasdiqlash uchun yuboradi
 /videolar — tayyor/tasdiq kutayotgan videolar ro'yxati; bosib ko'rish (katta videolar past sifatda ko'rsatiladi)
 /yarat [mavzu] — hoziroq yangi qo'shiq yaratish (mavzu ixtiyoriy)
@@ -170,7 +170,7 @@ class Bot:
                          f"pul sarflanmaydi. Tayyor bo'lgach tasdiqlash uchun yuboraman.")
             info = self.pipeline.add_mix_job(tracks, title or "", progress=lambda m: self.tg.send(m))
             self.tg.send(f"✅ Miks tayyor: {info['tracks']} ta qo'shiq, {longmix._fmt(info['duration'])}, "
-                         f"{info['backgrounds']} xil fon.")
+                         f"{info['backgrounds']} xil fon.\nBu qo'shiqlar keyingi miksga qayta tushmaydi.")
             self.send_review(info["job_id"])
         except Exception as exc:
             log.exception("mix failed")
@@ -926,19 +926,23 @@ class Bot:
                 else:
                     self.tg.send("Foydalanish: /fon_rejim brand (logo + doira, 11 fon) | video (klipingiz) | foto (rasmlaringiz) | aralash | rasm", chat_id)
             elif cmd in ("/miks", "/mix"):
-                days = int(arg.split()[0]) if arg.split() and arg.split()[0].isdigit() else 7
-                tracks = self.pipeline.mix_sources(days=days)
+                words = arg.split()
+                reuse = any(w.lower() in ("hammasi", "qayta", "all") for w in words)
+                days = int(words[0]) if words and words[0].isdigit() else 7
+                tracks = self.pipeline.mix_sources(days=days, reuse=reuse)
                 if len(tracks) < 2:
+                    c = self.pipeline.mix_candidates(days)
+                    extra = (f"\n{c['used']} tasi oldingi mikslarda ishlatilgan. Ularni ham qo'shish uchun: "
+                             f"/miks {days} hammasi") if c["used"] else ""
                     rows = self.db.recent(300)
-                    have = sum(1 for r in rows if r["mp3_path"] and Path(r["mp3_path"]).exists())
                     kinds = {}
                     for r in rows:
                         kinds[r["status"]] = kinds.get(r["status"], 0) + 1
-                    self.tg.send(f"So'nggi {days} kunda miks uchun qo'shiq topilmadi (topildi: {len(tracks)}, kamida 2 kerak).\n"
-                                 f"Bazada {len(rows)} ta yozuv, mp3 fayli borlari: {have}.\n"
-                                 f"Holatlar: {', '.join(f'{k}={v}' for k, v in sorted(kinds.items())) or '—'}\n"
-                                 f"Miks faqat posted/ready/review holatidagi qo'shiqlarni oladi. "
-                                 f"Ko'proq kun uchun: /miks 365", chat_id)
+                    self.tg.send(f"So'nggi {days} kunda miks uchun yangi qo'shiq topilmadi "
+                                 f"(yangi: {c['fresh']}, kamida 2 kerak).{extra}\n"
+                                 f"Bazada {len(rows)} ta yozuv. Holatlar: "
+                                 f"{', '.join(f'{k}={v}' for k, v in sorted(kinds.items())) or '—'}\n"
+                                 f"Miks faqat posted/ready/review holatidagilarni oladi. Uzoqroq davr: /miks 365", chat_id)
                 else:
                     threading.Thread(target=self.build_mix, args=(tracks, None), daemon=True).start()
             elif cmd in ("/miks_rejim", "/mix_rejim"):
