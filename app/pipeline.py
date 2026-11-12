@@ -216,12 +216,22 @@ class Pipeline:
         all_ok = self.mix_sources(days=days, reuse=True)
         return {"fresh": len(fresh), "with_used": len(all_ok), "used": len(all_ok) - len(fresh)}
 
-    def mix_looks(self) -> list:
-        """Every background a mix may show: the 11 logo themes and all of the owner's photo scenes."""
+    def mix_loop_cache(self) -> Path:
+        """Background loops live here: each one is drawn once and reused by every later mix."""
+        return self.cfg.data_dir / "mix_loops"
+
+    def mix_looks(self, limit: int = 8) -> list:
+        """Backgrounds for a mix: the logo themes and the owner's photo scenes, the ones already drawn first
+        (they cost nothing to reuse), then new ones to keep adding variety over time."""
         looks = [("brand", n) for n in range(1, brand.THEME_COUNT + 1)]
         looks += [("photo", (path, fx)) for _, path, fx in backgrounds.list_photos(self.cfg)]
         random.shuffle(looks)
-        return looks
+        cache = self.mix_loop_cache()
+        ready = [l for l in looks if (cache / f"{longmix.loop_name(l)}.mp4").exists()]
+        fresh = [l for l in looks if l not in ready]
+        chosen = (ready + fresh)[:limit] if limit else ready + fresh
+        random.shuffle(chosen)
+        return chosen
 
     def add_mix_job(self, tracks: list, title: str = "", progress=None) -> int:
         """Build one long mix and hand it over for approval like any other video."""
@@ -230,7 +240,8 @@ class Pipeline:
         folder.mkdir(parents=True, exist_ok=True)
         name = title or f"{len(tracks)} Songs · Chill Mix"
         info = longmix.build([(t[0], t[1]) for t in tracks], self.mix_looks(), folder / "video.mp4", folder / "work",
-                             cover_path=folder / "cover.png", title=name, progress=progress)
+                             cover_path=folder / "cover.png", title=name, progress=progress,
+                             cache=self.mix_loop_cache())
         for t in tracks:  # these are spent now: the next mix starts from newer songs
             if len(t) > 2:
                 self.db.kv_set(f"mixed:{t[2]}", str(job_id))

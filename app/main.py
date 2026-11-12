@@ -1023,6 +1023,13 @@ class Bot:
                 fails = 0
 
     def run(self) -> None:
+        if self.db.kv_get("mix_busy", "0") not in ("", "0"):  # nothing can be building right after a restart
+            self.db.kv_set("mix_busy", "0")
+            for row in self.db.recent(50):
+                if row["theme"] == "mix" and row["status"] == "producing":
+                    self.db.update(row["id"], status="failed", error="bot qayta ishga tushdi")
+            self.tg.send("♻️ Oldingi miks bot qayta ishga tushganda to'xtab qolgan edi. Chizilgan fonlar saqlanib qoldi, "
+                         "shuning uchun /miks ni qayta yuborsangiz ancha tez tugaydi.")
         pubfile.start()  # serves a remix source to the generator for a few minutes, nothing else
         threading.Thread(target=self.worker_loop, daemon=True, name="worker").start()
         threading.Thread(target=self.scheduler_loop, daemon=True, name="scheduler").start()

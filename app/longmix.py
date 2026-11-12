@@ -52,11 +52,18 @@ def join_audio(tracks: list, out_mp3: Path) -> list:
     return chapters
 
 
-def _loop_for(look, audio: Path, work: Path, index: int) -> Path:
-    """A short seamless background clip. look is ('brand', n) or ('photo', (path, effects))."""
-    raw = work / f"bg_raw_{index}.mp4"
-    out = work / f"bg_{index}.mp4"
-    if out.exists():
+def loop_name(look) -> str:
+    return f"brand{look[1]}" if look[0] == "brand" else f"photo_{Path(look[1][0]).stem}_{look[1][1]}"
+
+
+def _loop_for(look, audio: Path, cache: Path, work: Path) -> Path:
+    """A short seamless background clip, rendered once and then kept: later mixes reuse it in seconds.
+
+    look is ('brand', n) or ('photo', (path, effects))."""
+    cache.mkdir(parents=True, exist_ok=True)
+    out = cache / f"{loop_name(look)}.mp4"
+    raw = work / f"raw_{loop_name(look)}.mp4"
+    if out.exists() and out.stat().st_size > 10_000:
         return out
     if look[0] == "photo":
         photofx.render(audio, raw, look[1][0], look[1][1], "", max_seconds=LOOP_SECONDS + 4)
@@ -68,12 +75,13 @@ def _loop_for(look, audio: Path, work: Path, index: int) -> Path:
 
 
 def build(tracks: list, looks: list, out_mp4: Path, work: Path, cover_path: Path | None = None,
-          title: str = "", progress=None) -> dict:
+          title: str = "", progress=None, cache: Path | None = None) -> dict:
     """tracks: [(title, mp3_path)]. looks: [('brand', n) | ('photo', (path, fx))]. Returns mix facts."""
     if not looks:
         raise ValueError("Fon yo'q")
     work = Path(work)
     work.mkdir(parents=True, exist_ok=True)
+    cache = Path(cache) if cache else work / "loops"
     mixed = work / "mix.mp3"
     if progress:
         progress(f"🎚 {len(tracks)} ta qo'shiq birlashtirilmoqda...")
@@ -82,19 +90,22 @@ def build(tracks: list, looks: list, out_mp4: Path, work: Path, cover_path: Path
 
     # one background per track, cycling through the pool; each is rendered once and then reused
     per_track = [looks[i % len(looks)] for i in range(len(tracks))]
+    wanted = list(dict.fromkeys(loop_name(l) for l in per_track))
     loops: dict = {}
-    for i, look in enumerate(per_track):
-        key = (look[0], look[1] if look[0] == "brand" else str(look[1][0]))
-        if key not in loops:
-            if progress:
-                progress(f"🎬 Fon {len(loops) + 1}/{len(set((l[0], l[1] if l[0] == 'brand' else str(l[1][0])) for l in per_track))} chizilmoqda...")
-            loops[key] = _loop_for(look, mixed, work, len(loops))
+    for look in per_track:
+        key = loop_name(look)
+        if key in loops:
+            continue
+        if progress:
+            fresh = not (cache / f"{key}.mp4").exists()
+            progress(f"🎬 Fon {len(loops) + 1}/{len(wanted)}{' chizilmoqda...' if fresh else ' (tayyor)'}")
+        loops[key] = _loop_for(look, mixed, cache, work)
     loop_len = video.probe_duration(next(iter(loops.values())))
 
     # repeat each loop enough to cover its track, keeping the picture roughly in step with the audio
     lines, shown, target = [], 0.0, 0.0
     for i, (track, look) in enumerate(zip(tracks, per_track)):
-        key = (look[0], look[1] if look[0] == "brand" else str(look[1][0]))
+        key = loop_name(look)
         target += video.probe_duration(track[1]) - (CROSSFADE if i < len(tracks) - 1 else 0)
         repeats = max(1, round((target - shown) / loop_len))
         lines += [f"file '{loops[key].resolve()}'"] * repeats
@@ -125,7 +136,7 @@ def build(tracks: list, looks: list, out_mp4: Path, work: Path, cover_path: Path
         else:
             brand.cover_frame(cover_path, first[1], title)
 
-    for leftover in list(loops.values()) + [silent, listfile]:
+    for leftover in (silent, listfile):  # the loops are kept: the next mix reuses them
         Path(leftover).unlink(missing_ok=True)
     return {
         "mp3": mixed,

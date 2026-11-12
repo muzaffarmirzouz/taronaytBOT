@@ -581,8 +581,9 @@ _PF.render = lambda a, o, ph, fx, t="", **k: _op(a, o, ph, fx, t, size=(320, 180
 _LM.LOOP_SECONDS = 5
 _mix_calls = len(calls)
 _pid2 = backgrounds.add_photo(cfg, TMP / "photo.jpg", "snow")
-_looks = pipe.mix_looks()
+_looks = pipe.mix_looks(limit=0)
 assert len(_looks) == _B.THEME_COUNT + len(backgrounds.list_photos(cfg)), len(_looks)
+assert len(pipe.mix_looks(limit=3)) == 3  # a mix does not draw 18 backgrounds before it can start
 _info = pipe.add_mix_job(_mix_tracks, "Weekly Chill Mix")
 _mj = db.get(_info["job_id"])
 assert _mj["status"] == "review" and Path(_mj["mp4_path"]).exists() and Path(_mj["image_path"]).exists()
@@ -607,6 +608,13 @@ assert all(t[2] in [x[2] for x in pipe.mix_sources(days=9999, reuse=True)] for t
 _c = pipe.mix_candidates(9999)
 assert _c["used"] >= 2 and _c["with_used"] > _c["fresh"]
 db.update(_info2["job_id"], status="failed")
+# background loops are kept and reused, so the second mix does not redraw them
+_cached = sorted(p.name for p in pipe.mix_loop_cache().glob("*.mp4"))
+assert _cached, "loops must be cached for the next mix"
+_stamps = {p.name: p.stat().st_mtime_ns for p in pipe.mix_loop_cache().glob("*.mp4")}
+_info3 = pipe.add_mix_job([(t[0], t[1], t[2]) for t in pipe.mix_sources(days=9999, reuse=True)[:2]], "Reuse Test")
+assert {p.name: p.stat().st_mtime_ns for p in pipe.mix_loop_cache().glob("*.mp4")}[_cached[0]] == _stamps[_cached[0]]
+db.update(_info3["job_id"], status="failed")
 db.update(_info["job_id"], status="failed")
 backgrounds.remove_photo(cfg, _pid2)
 _B.render, _PF.render, _LM.LOOP_SECONDS = _ob, _op, _ol
