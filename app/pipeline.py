@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import backgrounds, brand, claude_api, djedit, images, mureka, photofx, pubfile, video, youtube
+from . import backgrounds, brand, claude_api, djedit, images, longmix, mureka, photofx, pubfile, video, youtube
 
 log = logging.getLogger("pipeline")
 
@@ -40,6 +40,10 @@ IDEAS = [
     ("tropical house", "summer festival and neon lights"),
     ("hard rap, boom-bap and trap drums, rapped verses with a sung hook", "rising from the streets with nothing but a dream"),
     ("melodic rap, dark piano loop, deep 808", "late night drive and unspoken words"),
+    # calm, search-friendly moods: people look these up by feeling, not by artist name
+    ("lo-fi chillhop with vinyl crackle and mellow Rhodes, quiet vocal", "rain on the window and a slow morning"),
+    ("lo-fi chillhop, jazzy guitar and soft boom-bap drums", "studying late and letting the night pass"),
+    ("ambient downtempo with felt piano and airy pads", "the quiet after everyone has gone home"),
 ]
 
 
@@ -183,6 +187,42 @@ class Pipeline:
         name = f"{title} ({info['label'].split()[-1]} Remix)" if title else ""
         self.db.update(job_id, title=name[:45], style="__upload__", mp3_path=str(folder / "song.mp3"), lyrics="")
         self.db.update(job_id, status="queued")
+        info["job_id"] = job_id
+        return info
+
+    def mix_sources(self, days: int = 7, limit: int = 40) -> list:
+        """The songs a mix is built from: what went out (or is ready) in the last week, oldest first."""
+        cutoff = time.time() - days * 86400
+        rows = [r for r in self.db.recent(300)
+                if r["status"] in ("posted", "ready", "review") and r["mp3_path"]
+                and Path(r["mp3_path"]).exists() and float(r["created_at"] or 0) >= cutoff]
+        rows.sort(key=lambda r: float(r["created_at"] or 0))
+        return [(r["title"] or f"#{r['id']}", Path(r["mp3_path"])) for r in rows[-limit:]]
+
+    def mix_looks(self) -> list:
+        """Every background a mix may show: the 11 logo themes and all of the owner's photo scenes."""
+        looks = [("brand", n) for n in range(1, brand.THEME_COUNT + 1)]
+        looks += [("photo", (path, fx)) for _, path, fx in backgrounds.list_photos(self.cfg)]
+        random.shuffle(looks)
+        return looks
+
+    def add_mix_job(self, tracks: list, title: str = "", progress=None) -> int:
+        """Build one long mix and hand it over for approval like any other video."""
+        job_id = self.db.add_job("user", "", "mix", status="producing")
+        folder = self.job_dir(job_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        name = title or f"{len(tracks)} Songs · Chill Mix"
+        info = longmix.build(tracks, self.mix_looks(), folder / "video.mp4", folder / "work",
+                             cover_path=folder / "cover.png", title=name, progress=progress)
+        self.db.update(
+            job_id, title=name[:45], style="__upload__", lyrics="[mix]",
+            mp3_path=str(info["mp3"]), mp4_path=str(folder / "video.mp4"), image_path=str(folder / "cover.png"),
+            yt_title=f"{name} | {int(info['duration'] // 60)} Min Nonstop AI Music"[:100],
+            yt_description=longmix.description(info, info["chapters"]),
+            yt_tags=json.dumps(["mix", "chill mix", "lofi mix", "ai music", "nonstop music", "study music",
+                                "relaxing music", "background music", "playlist"]),
+        )
+        self.db.update(job_id, status="review")
         info["job_id"] = job_id
         return info
 

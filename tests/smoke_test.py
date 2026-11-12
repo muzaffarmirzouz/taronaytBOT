@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import claude_api, mureka, net, scheduler, youtube  # noqa: E402
+from app.claude_api import GENRES as GENRES_ALL  # noqa: E402
 from app.config import Config  # noqa: E402
 from app.db import DB  # noqa: E402
 from app.pipeline import Pipeline  # noqa: E402
@@ -520,6 +521,16 @@ _m = claude_api.build_user_message(_en_poem, "", [], language="uz")
 assert "UZBEK" in _m and "sung EXACTLY as written" not in _m
 assert "TURKISH" in claude_api.build_user_message(_uz_poem, "", [], language="tr")
 
+# lo-fi and ambient: new calm genres, and the calm ones keep their intro
+assert "lofi" in GENRES_ALL and "chill" in GENRES_ALL
+assert claude_api.genre_key("lo-fi chillhop with vinyl crackle") == "lofi"
+assert claude_api.genre_key("ambient downtempo, felt piano") == "chill"
+_pkg = {"title": "T", "lyrics": "[Intro]\nmmm\n[Verse]\nhi", "style": "lo-fi chillhop, 75 BPM",
+        "image_prompt": "x", "yt_title": "t", "yt_description": "d", "yt_tags": ["a"]}
+assert "[Intro]" in claude_api._validate(dict(_pkg), "male", calm=True)["lyrics"]
+assert "[Intro]" not in claude_api._validate(dict(_pkg), "male", calm=False)["lyrics"]
+assert "vocals start within" not in claude_api._validate(dict(_pkg), "male", calm=True)["style"]
+
 # photo mode: the owner's picture + weather effects (rain, tears, wind, snow)
 from PIL import Image as _PI  # noqa: E402
 from app import photofx as _pfx  # noqa: E402
@@ -557,6 +568,38 @@ _pfx.render, _pfx.cover_frame = _orig_prender, _orig_pcover
 db.update(job_ph, status="failed")
 assert backgrounds.remove_photo(cfg, pid) and pid not in [i for i, _, _ in backgrounds.list_photos(cfg)]
 db.kv_set("bg_mode", "brand")
+# long mix: many finished songs become one video, the picture changing with each track
+import app.brand as _B, app.photofx as _PF, app.longmix as _LM  # noqa: E402
+_mix_tracks = []
+for _i in range(3):
+    _p = TMP / f"mixsrc{_i}.mp3"
+    shutil.copy(LONG, _p)
+    _mix_tracks.append((f"Track {_i + 1}", _p))
+_ob, _op, _ol = _B.render, _PF.render, _LM.LOOP_SECONDS
+_B.render = lambda a, o, th, t="", **k: _ob(a, o, th, t, size=(320, 180), fps=8, max_seconds=k.get("max_seconds"))
+_PF.render = lambda a, o, ph, fx, t="", **k: _op(a, o, ph, fx, t, size=(320, 180), fps=8, max_seconds=k.get("max_seconds"))
+_LM.LOOP_SECONDS = 5
+_mix_calls = len(calls)
+_pid2 = backgrounds.add_photo(cfg, TMP / "photo.jpg", "snow")
+_looks = pipe.mix_looks()
+assert len(_looks) == _B.THEME_COUNT + len(backgrounds.list_photos(cfg)), len(_looks)
+_info = pipe.add_mix_job(_mix_tracks, "Weekly Chill Mix")
+_mj = db.get(_info["job_id"])
+assert _mj["status"] == "review" and Path(_mj["mp4_path"]).exists() and Path(_mj["image_path"]).exists()
+assert _info["tracks"] == 3 and _info["backgrounds"] >= 1
+assert [c for c, _ in _info["chapters"]] == ["Track 1", "Track 2", "Track 3"]
+assert _info["chapters"][0][1] == "0:00" and _info["chapters"][1][1] != "0:00"
+_expect = sum(video.probe_duration(p) for _, p in _mix_tracks) - 2 * _LM.CROSSFADE
+assert abs(_info["duration"] - _expect) < 1.5, (_info["duration"], _expect)
+assert abs(video.probe_duration(Path(_mj["mp4_path"])) - _info["duration"]) < 1.5
+assert "Tracklist:" in _mj["yt_description"] and "0:00 Track 1" in _mj["yt_description"]
+assert len(calls) == _mix_calls  # a mix costs nothing: no generator, no Claude, no image API
+assert pipe.mix_sources(days=7) and all(Path(p).exists() for _, p in pipe.mix_sources(days=7))
+assert not pipe.mix_sources(days=0)
+db.update(_info["job_id"], status="failed")
+backgrounds.remove_photo(cfg, _pid2)
+_B.render, _PF.render, _LM.LOOP_SECONDS = _ob, _op, _ol
+
 # automatic songs ignore the mode and always get a logo background
 for _mode in ("video", "rasm", "aralash"):
     db.kv_set("bg_mode", _mode)

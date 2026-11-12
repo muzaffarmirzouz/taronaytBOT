@@ -45,7 +45,10 @@ def _extract_json(text: str) -> dict:
     return json.loads(text[start:end + 1])
 
 
-def _validate(data: dict, voice: str = "", verbatim: bool = False) -> dict:
+CALM_GENRES = ("lofi", "chill")  # these genres live on their intro and their quiet: do not rush the vocal in
+
+
+def _validate(data: dict, voice: str = "", verbatim: bool = False, calm: bool = False) -> dict:
     required = ["title", "lyrics", "style", "image_prompt", "yt_title", "yt_description", "yt_tags"]
     for key in required:
         if not data.get(key):
@@ -57,11 +60,12 @@ def _validate(data: dict, voice: str = "", verbatim: bool = False) -> dict:
         tags = [t.strip() for t in tags.split(",")]
     data["yt_tags"] = [str(t).strip() for t in tags if str(t).strip()]
     data["title"] = str(data["title"]).strip()[:50]
-    data["lyrics"] = (str(data["lyrics"]).strip() if verbatim else _no_intro(str(data["lyrics"]).strip()))[:4800]
+    keep = verbatim or calm
+    data["lyrics"] = (str(data["lyrics"]).strip() if keep else _no_intro(str(data["lyrics"]).strip()))[:4800]
     style = str(data["style"]).strip()
     if voice:
         style = _set_vocal(style, voice, limit=290 - len(FAST_START) - 2)
-    data["style"] = _fast_start(style)
+    data["style"] = style[:290] if calm else _fast_start(style)
     data["yt_title"] = str(data["yt_title"]).strip()[:100]
     data["yt_description"] = str(data["yt_description"]).strip()[:4000]
     data["theme"] = str(data.get("theme", "")).strip()[:60]
@@ -118,6 +122,13 @@ GENRES = {
     "ballad": ("💞 Ballada",
                "cinematic emotional pop ballad, 70-76 BPM, intimate piano, warm strings, soft building drums, "
                "expressive heartfelt vocal with a powerful final chorus, rich spacious studio mix"),
+    "lofi": ("🌙 Lo-fi / Chill",
+             "lo-fi chillhop, 70-85 BPM, dusty vinyl crackle, soft boom-bap drums with brushed snare, warm mellow Rhodes and "
+             "jazzy guitar chords, round upright bass, quiet breathy intimate vocal sitting low in the mix, calm and nostalgic, "
+             "no big drop, gentle tape-saturated master"),
+    "chill": ("🕯 Ambient / Sokin",
+              "ambient downtempo, 60-72 BPM, slow airy pads, soft felt piano, distant reverb, minimal brushed percussion, "
+              "gentle floating vocal with long sustained notes, spacious cinematic and peaceful, very dynamic quiet master"),
     "any": ("🎲 Tasodifiy sho'x",
             "any upbeat, energetic and danceable genre you think fits this text best, with modern polished studio production"),
 }
@@ -139,6 +150,11 @@ GENRE_LYRIC_RULES = {
     "rap": "RAP STRUCTURE: the verses are real RAPPED lines (not sung): 6-8 lines each, dense rhythm, internal rhymes and multi-syllable "
            "rhymes, short bracketed ad-libs, storytelling or boasting with concrete details. Order: [Hook] (4 lines, sung, catchy) "
            "[Verse] [Hook] [Verse] [Hook]. HARD LIMIT 1300 characters, never repeat a line more than 4 times, no endless ad-lib chains.",
+    "lofi": "LO-FI STRUCTURE: few words, lots of space. Short repeated lines, simple everyday images (rain on the window, cold coffee, "
+            "late buses, an empty room), no big statements and no belting. Order: [Verse] [Hook] [Verse] [Hook] [Outro]. "
+            "600-1000 characters.",
+    "chill": "AMBIENT STRUCTURE: very sparse. Long calm lines with plenty of silence between them, one simple image held throughout, "
+             "a hook that is barely more than a phrase. Order: [Verse] [Hook] [Verse] [Hook]. 500-900 characters.",
     "ballad": "BALLAD STRUCTURE: [Verse] [Pre-Chorus] [Chorus] [Verse] [Pre-Chorus] [Chorus] [Bridge] [Final Chorus]. Vivid imagery, "
               "slow phrasing, emotional peak in the bridge.",
 }
@@ -178,7 +194,9 @@ def _set_vocal(style: str, voice: str, limit: int = 290) -> str:
 def genre_key(text: str) -> str:
     """Map a free-text genre/theme (auto songs) to one of the GENRES keys, '' if unknown."""
     t = (text or "").lower()
-    for key, words in (("remix", ("remix", "edm", "festival", "bass drop")),
+    for key, words in (("lofi", ("lo-fi", "lofi", "chillhop", "chill hop", "boom-bap jazz")),
+                       ("chill", ("ambient", "downtempo", "sleep", "meditation", "calm", "peaceful")),
+                       ("remix", ("remix", "edm", "festival", "bass drop")),
                        ("afro", ("afro", "amapiano")),
                        ("club", ("club", "house", "dance", "disco", "techno", "electro")),
                        ("trap", ("trap",)),
@@ -375,7 +393,8 @@ def make_package(cfg, raw_text: str = "", theme: str = "", avoid_titles: list | 
         data = resp.json()
         text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
         try:
-            pkg = _validate(_extract_json(text), voice, verbatim=is_verbatim(raw_text, language))
+            pkg = _validate(_extract_json(text), voice, verbatim=is_verbatim(raw_text, language),
+                            calm=genre_key(genre) in CALM_GENRES)
             if is_verbatim(raw_text, language):
                 pkg["lyrics"] = _enforce_owner_lyrics(raw_text, pkg["lyrics"])
             return pkg

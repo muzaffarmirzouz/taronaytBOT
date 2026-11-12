@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import backgrounds, brand, djedit, photofx, pubfile, scheduler, video
+from . import backgrounds, brand, djedit, longmix, photofx, pubfile, scheduler, video
 from .config import Config
 from .claude_api import GENRES, VOICES
 from .db import DB, STOCK_STATUSES
@@ -26,7 +26,7 @@ Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot tilni (🇺🇿 o'zbekcha / �
 
 /holat — navbat, keyingi joylash vaqti, bugungi sarf
 /navbat — oxirgi 10 ta qo'shiq
-/remiks <id> — o'z qo'shig'ingizni remiks qilish (AI remiks yoki bepul DJ-edit)\n/eksport <id> — Spotify distribyutori uchun: mp3, kvadrat muqova, matn
+/miks [kun] — so'nggi qo'shiqlardan uzun miks yig'ish (haftada bir marta o'zi ham yig'adi, /miks_rejim on|off)\n/remiks <id> — o'z qo'shig'ingizni remiks qilish (AI remiks yoki bepul DJ-edit)\n/eksport <id> — Spotify distribyutori uchun: mp3, kvadrat muqova, matn
 Tayyor mp3 yuborsangiz (izoh bilan: nomi, janr) — bot muqova+video qilib, tasdiqlash uchun yuboradi
 /videolar — tayyor/tasdiq kutayotgan videolar ro'yxati; bosib ko'rish (katta videolar past sifatda ko'rsatiladi)
 /yarat [mavzu] — hoziroq yangi qo'shiq yaratish (mavzu ixtiyoriy)
@@ -136,9 +136,46 @@ class Bot:
             try:
                 if not self.paused():
                     self.check_slot()
+                self.check_weekly_mix()
             except Exception:
                 log.exception("scheduler loop error")
             self.stop.wait(30)
+
+    def check_weekly_mix(self) -> None:
+        """Once a week, gather the songs that went out and build one long mix of them."""
+        if self.db.kv_get("mix_weekly", "on") != "on" or self.db.kv_get("mix_busy", "") == "1":
+            return
+        now = datetime.now(self.tz)
+        day, hour = int(self.db.kv_get("mix_day", "6")), int(self.db.kv_get("mix_hour", "11"))  # Sunday, 11:00
+        if now.weekday() != day or now.hour != hour:
+            return
+        key = now.strftime("%Y-%W")
+        if self.db.kv_get("mix_done_week", "") == key:
+            return
+        self.db.kv_set("mix_done_week", key)
+        tracks = self.pipeline.mix_sources()
+        if len(tracks) < 5:
+            self.tg.send(f"🎚 Haftalik miks uchun qo'shiq kam ({len(tracks)} ta, kamida 5 kerak). Keyingi haftada urinaman.")
+            return
+        threading.Thread(target=self.build_mix, args=(tracks, None), daemon=True).start()
+
+    def build_mix(self, tracks: list, title: str | None) -> None:
+        if self.db.kv_get("mix_busy", "") == "1":
+            self.tg.send("🎚 Miks allaqachon yig'ilmoqda, tugashini kuting.")
+            return
+        self.db.kv_set("mix_busy", "1")
+        try:
+            self.tg.send(f"🎚 {len(tracks)} ta qo'shiqdan uzun miks yig'ilmoqda. Bu 5–20 daqiqa oladi, "
+                         f"pul sarflanmaydi. Tayyor bo'lgach tasdiqlash uchun yuboraman.")
+            info = self.pipeline.add_mix_job(tracks, title or "", progress=lambda m: self.tg.send(m))
+            self.tg.send(f"✅ Miks tayyor: {info['tracks']} ta qo'shiq, {longmix._fmt(info['duration'])}, "
+                         f"{info['backgrounds']} xil fon.")
+            self.send_review(info["job_id"])
+        except Exception as exc:
+            log.exception("mix failed")
+            self.tg.send(f"⚠️ Miks yig'ilmadi: {str(exc)[:400]}")
+        finally:
+            self.db.kv_set("mix_busy", "")
 
     def check_slot(self) -> None:
         now = datetime.now(self.tz)
@@ -887,6 +924,21 @@ class Bot:
                     self.tg.send(names[arg], chat_id)
                 else:
                     self.tg.send("Foydalanish: /fon_rejim brand (logo + doira, 11 fon) | video (klipingiz) | foto (rasmlaringiz) | aralash | rasm", chat_id)
+            elif cmd == "/miks":
+                days = int(arg.split()[0]) if arg.split() and arg.split()[0].isdigit() else 7
+                tracks = self.pipeline.mix_sources(days=days)
+                if len(tracks) < 2:
+                    self.tg.send(f"So'nggi {days} kunda miks uchun qo'shiq yo'q (topildi: {len(tracks)}, kamida 2 kerak).\n"
+                                 f"Ko'proq kun uchun: /miks 30", chat_id)
+                else:
+                    threading.Thread(target=self.build_mix, args=(tracks, None), daemon=True).start()
+            elif cmd == "/miks_rejim":
+                if arg.lower() in ("on", "off"):
+                    self.db.kv_set("mix_weekly", arg.lower())
+                    self.tg.send(f"🎚 Haftalik avtomatik miks: {'yoqildi (yakshanba 11:00)' if arg.lower() == 'on' else 'o‘chirildi'}", chat_id)
+                else:
+                    state = self.db.kv_get("mix_weekly", "on")
+                    self.tg.send(f"🎚 Haftalik avtomatik miks hozir: {state}. O'zgartirish: /miks_rejim on | off", chat_id)
             elif cmd == "/remiks":
                 target = int(arg.split()[0]) if arg.split() and arg.split()[0].isdigit() else None
                 row = self.db.get(target) if target else None
