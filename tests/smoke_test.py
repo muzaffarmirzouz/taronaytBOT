@@ -59,6 +59,12 @@ class Resp:
 
 def fake_request(method, url, **kw):
     calls.append((method, url))
+    if "api.wavespeed.ai" in url:
+        if method == "POST":
+            assert kw["headers"]["Authorization"] == "Bearer wk" and kw["json"]["lyrics"] and kw["json"].get("gender") in (None, "male", "female")
+            calls.append(("WS_BODY", json.dumps(kw["json"])))
+            return Resp(js={"code": 200, "data": {"id": "ws1", "status": "created"}})
+        return Resp(js={"code": 200, "data": {"id": "ws1", "status": "completed", "outputs": ["https://cdn.example/ws1.mp3"]}})
     if "api.anthropic.com" in url:
         last_claude["body"] = kw["json"]
         return Resp(js={"content": [{"type": "text", "text": "```json\n" + json.dumps(PACKAGE) + "\n```"}]})
@@ -451,6 +457,16 @@ for _n in range(1, _brand.THEME_COUNT + 1):  # every theme renders a still witho
     _orig_cover(TMP / f"theme_{_n}.png", _n, "T", size=(320, 180))
 _brand.render, _brand.cover_frame = _orig_render, _orig_cover
 db.update(job_br, status="failed")
+# WaveSpeed provider: same song, one request + polling, gender passed on
+import dataclasses as _dc  # noqa: E402
+_cfg_ws = _dc.replace(cfg, song_provider="wavespeed", wavespeed_key="wk")
+_r = mureka.generate(_cfg_ws, "[Verse]\nhello", "deep male vocal, pop, 120 BPM")
+assert _r["url"].endswith("ws1.mp3") and _r["task_id"] == "ws1"
+assert json.loads([c for c in calls if c[0] == "WS_BODY"][-1][1])["gender"] == "male"
+mureka.generate(_cfg_ws, "[Verse]\nhello", "female duet pop")
+assert "gender" not in json.loads([c for c in calls if c[0] == "WS_BODY"][-1][1])
+assert "WAVESPEED_API_KEY" in _dc.replace(cfg, song_provider="wavespeed", wavespeed_key="").missing()
+
 # photo mode: the owner's picture + weather effects (rain, tears, wind, snow)
 from PIL import Image as _PI  # noqa: E402
 from app import photofx as _pfx  # noqa: E402

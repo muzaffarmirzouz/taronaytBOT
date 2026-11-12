@@ -26,6 +26,8 @@ class Config:
     telegram_token: str
     admin_id: int
     mureka_key: str
+    song_provider: str
+    wavespeed_key: str
     mureka_base: str
     mureka_model: str
     mureka_vocal_id: str
@@ -57,6 +59,8 @@ class Config:
             telegram_token=_env("TELEGRAM_BOT_TOKEN"),
             admin_id=_int("ADMIN_ID", 0),
             mureka_key=_env("MUREKA_API_KEY"),
+            song_provider=_env("SONG_PROVIDER", "mureka").lower(),  # mureka | wavespeed (same Mureka V9.5 model, cheaper)
+            wavespeed_key=_env("WAVESPEED_API_KEY"),
             mureka_base=_env("MUREKA_BASE_URL", "https://api.mureka.ai").rstrip("/"),
             mureka_model=_env("MUREKA_MODEL", "auto"),
             mureka_vocal_id=_env("MUREKA_VOCAL_ID", ""),  # optional: a cloned/own vocal from the Mureka platform
@@ -86,7 +90,8 @@ class Config:
         required = {
             "TELEGRAM_BOT_TOKEN": self.telegram_token,
             "ADMIN_ID": self.admin_id,
-            "MUREKA_API_KEY": self.mureka_key,
+            ("WAVESPEED_API_KEY" if self.song_provider == "wavespeed" else "MUREKA_API_KEY"):
+                self.wavespeed_key if self.song_provider == "wavespeed" else self.mureka_key,
             "ANTHROPIC_API_KEY": self.anthropic_key,
             "OPENAI_API_KEY": self.openai_key,
             "YT_CLIENT_ID": self.yt_client_id,
