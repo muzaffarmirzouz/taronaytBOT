@@ -531,6 +531,46 @@ assert "[Intro]" in claude_api._validate(dict(_pkg), "male", calm=True)["lyrics"
 assert "[Intro]" not in claude_api._validate(dict(_pkg), "male", calm=False)["lyrics"]
 assert "vocals start within" not in claude_api._validate(dict(_pkg), "male", calm=True)["style"]
 
+# a brief outage on the generator's side must not burn the song's three attempts
+_tj = db.add_job("user", raw_text="z" * 40)
+db.update(_tj, lyrics="[Verse]\nhi", title="T", style="s", yt_title="T", yt_description="d",
+          yt_tags=json.dumps(["a", "b", "c", "d", "e"]))
+class _TG6:
+    def __init__(self): self.sent = []
+    def send(self, text, *a, **k): self.sent.append(text)
+    def send_buttons(self, text, *a, **k): self.sent.append(text)
+    def answer_callback(self, *a, **k): pass
+_old6, bot.tg = bot.tg, _TG6()
+_real_produce = pipe.produce
+_boom = ["upstream service couldn't complete this request right now. Please try again in a moment."]
+def _flaky(job_id, *a, **k):
+    if _boom:
+        raise RuntimeError(_boom.pop())
+    return _real_produce(job_id, *a, **k)
+pipe.produce = _flaky
+bot.stop = _th.Event()
+_old_wait, bot.stop.wait = bot.stop.wait, lambda *a, **k: None
+bot.produce_next()
+assert db.get(_tj)["status"] == "queued" and (db.get(_tj)["attempts"] or 0) == 0, db.get(_tj)
+assert db.kv_get(f"soft:{_tj}") == "1"
+assert any("xizmat hozir band" in t for t in bot.tg.sent), bot.tg.sent
+assert not any("xatolik (1/3)" in t for t in bot.tg.sent)
+# a real error still counts against the three
+_boom.append("Claude returned invalid JSON 3 times")
+bot.produce_next()
+assert (db.get(_tj)["attempts"] or 0) == 1 and any("xatolik (1/3)" in t for t in bot.tg.sent)
+# after SOFT_MAX soft retries it stops being excused
+db.kv_set(f"soft:{_tj}", str(bot.SOFT_MAX))
+_boom.append("upstream service couldn't complete this request right now.")
+bot.produce_next()
+assert (db.get(_tj)["attempts"] or 0) == 2, db.get(_tj)["attempts"]
+# /qayta puts a stopped song back in the queue and clears both counters
+db.update(_tj, status="failed", attempts=3)
+bot.handle({"chat": {"id": 1}, "from": {"id": 1}, "text": f"/qayta {_tj}"})
+assert db.get(_tj)["status"] == "queued" and (db.get(_tj)["attempts"] or 0) == 0 and db.kv_get(f"soft:{_tj}") == "0"
+pipe.produce, bot.tg = _real_produce, _old6
+db.update(_tj, status="failed")
+
 # photo mode: the owner's picture + weather effects (rain, tears, wind, snow)
 from PIL import Image as _PI  # noqa: E402
 from app import photofx as _pfx  # noqa: E402

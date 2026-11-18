@@ -26,7 +26,7 @@ Oddiy matn (sher/qo'shiq so'zlari) yuboring: bot tilni (🇺🇿 o'zbekcha / �
 
 /holat — navbat, keyingi joylash vaqti, bugungi sarf
 /navbat — oxirgi 10 ta qo'shiq
-/miks [kun] — so'nggi qo'shiqlardan uzun miks (bir marta ishlatilgani qayta tushmaydi; /miks 30 hammasi — qayta ishlatadi) (haftada bir marta o'zi ham yig'adi, /miks_rejim on|off)\n/remiks <id> — o'z qo'shig'ingizni remiks qilish (AI remiks yoki bepul DJ-edit)\n/eksport <id> — Spotify distribyutori uchun: mp3, kvadrat muqova, matn
+/qayta <id> — to'xtab qolgan qo'shiqni qaytadan boshlash\n/miks [kun] — so'nggi qo'shiqlardan uzun miks (bir marta ishlatilgani qayta tushmaydi; /miks 30 hammasi — qayta ishlatadi) (haftada bir marta o'zi ham yig'adi, /miks_rejim on|off)\n/remiks <id> — o'z qo'shig'ingizni remiks qilish (AI remiks yoki bepul DJ-edit)\n/eksport <id> — Spotify distribyutori uchun: mp3, kvadrat muqova, matn
 Tayyor mp3 yuborsangiz (izoh bilan: nomi, janr) — bot muqova+video qilib, tasdiqlash uchun yuboradi
 /videolar — tayyor/tasdiq kutayotgan videolar ro'yxati; bosib ko'rish (katta videolar past sifatda ko'rsatiladi)
 /yarat [mavzu] — hoziroq yangi qo'shiq yaratish (mavzu ixtiyoriy)
@@ -66,6 +66,14 @@ class Bot:
         return self.db.kv_get("paused", "0") == "1"
 
     # --- worker: keeps the stock filled --------------------------------
+    # the other side is briefly down and refused the request: nothing was generated, so retrying costs nothing.
+    # "timed out" is deliberately NOT here: that one may have run and been charged.
+    TRANSIENT = ("upstream service", "try again in a moment", "bad gateway", "service unavailable",
+                 "temporarily unavailable", "gateway time-out", " 502", " 503", " 504", "connection reset",
+                 "connection aborted", "remote end closed")
+    SOFT_WAIT = 600  # 10 minutes: long enough to sit out a normal outage
+    SOFT_MAX = 12    # give up after two hours of this
+
     def worker_loop(self) -> None:
         while not self.stop.is_set():
             try:
@@ -93,6 +101,7 @@ class Bot:
             try:
                 self.pipeline.produce(job["id"])
                 done = self.db.get(job["id"])
+                self.db.kv_set(f"soft:{job['id']}", "0")
                 if done["status"] == "review":
                     self.send_review(job["id"])
                 else:
@@ -119,14 +128,29 @@ class Bot:
                                      "kredit paydo bo'lgach bot o'zi davom etadi (har 30 daqiqada tekshiradi).")
                     self.stop.wait(1800)
                     return
+                soft = int(self.db.kv_get(f"soft:{job['id']}", "0") or 0)
+                if any(m in low for m in self.TRANSIENT) and soft < self.SOFT_MAX:
+                    # their service refused the request; the song keeps all three of its real attempts
+                    soft += 1
+                    self.db.kv_set(f"soft:{job['id']}", str(soft))
+                    self.db.update(job["id"], status="queued", error=str(exc)[:500])
+                    log.warning("job %s: upstream busy (soft retry %s/%s): %s", job["id"], soft, self.SOFT_MAX, exc)
+                    if soft == 1:
+                        self.tg.send(f"⏳ #{job['id']}: xizmat hozir band (\"{str(exc)[:120]}\"). "
+                                     f"Bu vaqtinchalik, pul sarflanmadi. Har 10 daqiqada o'zim qayta urinaman, "
+                                     f"2 soat davomida. Siz hech narsa qilmasangiz ham bo'ladi.")
+                    self.stop.wait(self.SOFT_WAIT)
+                    return
                 log.exception("job %s failed", job["id"])
                 attempts = (job.get("attempts") or 0) + 1
                 final = attempts >= 3
                 self.db.update(job["id"], status="failed" if final else "queued",
                                attempts=attempts, error=str(exc)[:500])
+                extra = (f" ({soft} marta xizmat band bo'lgani uchun ham kutildi)" if soft else "")
                 self.tg.send(
-                    f"⚠️ #{job['id']} xatolik ({attempts}/3): {str(exc)[:300]}"
-                    + ("\n❌ 3 marta urinildi, bu qo'shiq to'xtatildi." if final else "\nQayta uriniladi.")
+                    f"⚠️ #{job['id']} xatolik ({attempts}/3){extra}: {str(exc)[:300]}"
+                    + ("\n❌ 3 marta urinildi, bu qo'shiq to'xtatildi. Qayta urinish: /qayta "
+                       f"{job['id']}" if final else "\nQayta uriniladi.")
                 )
                 self.stop.wait(60 * attempts)
 
@@ -925,6 +949,21 @@ class Bot:
                     self.tg.send(names[arg], chat_id)
                 else:
                     self.tg.send("Foydalanish: /fon_rejim brand (logo + doira, 11 fon) | video (klipingiz) | foto (rasmlaringiz) | aralash | rasm", chat_id)
+            elif cmd == "/qayta":
+                target = int(arg.split()[0]) if arg.split() and arg.split()[0].isdigit() else None
+                row = self.db.get(target) if target else None
+                if not row:
+                    failed = [r["id"] for r in self.db.recent(60) if r["status"] == "failed"]
+                    self.tg.send("Foydalanish: /qayta <id> — to'xtab qolgan qo'shiqni qaytadan boshlaydi.\n"
+                                 + (f"To'xtaganlari: {', '.join('#' + str(i) for i in failed[:15])}" if failed
+                                    else "Hozir to'xtab qolgan qo'shiq yo'q."), chat_id)
+                elif row["status"] not in ("failed", "queued"):
+                    self.tg.send(f"#{target} hozir '{row['status']}' holatida, qayta boshlash kerak emas.", chat_id)
+                else:
+                    self.db.update(target, status="queued", attempts=0, error="")
+                    self.db.kv_set(f"soft:{target}", "0")
+                    self.wake.set()
+                    self.tg.send(f"🔄 #{target} qaytadan navbatga qo'yildi.", chat_id)
             elif cmd in ("/miks", "/mix"):
                 words = arg.split()
                 reuse = any(w.lower() in ("hammasi", "qayta", "all") for w in words)
