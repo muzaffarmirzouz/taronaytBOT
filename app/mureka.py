@@ -114,12 +114,30 @@ def _generate_wavespeed(cfg, lyrics: str, style: str, melody_id: str = "", refer
     return {"url": url, "duration_ms": 0, "task_id": task_id}
 
 
-def generate(cfg, lyrics: str, style: str, melody_id: str = "", reference_id: str = "") -> dict:
-    """Create one song and wait until it is ready. Returns {"url", "duration_ms", "task_id"}.
+TRANSIENT = ("upstream service", "try again in a moment", "bad gateway", "service unavailable",
+             "temporarily unavailable", " 502", " 503", " 504")
 
-    melody_id / reference_id come from upload_audio() and turn this into a remix of that audio."""
+
+def looks_transient(exc) -> bool:
+    """The other side refused the request rather than failing it: nothing was generated and nothing was charged."""
+    low = str(exc).lower()
+    return any(m in low for m in TRANSIENT)
+
+
+def generate(cfg, lyrics: str, style: str, melody_id: str = "", reference_id: str = "", fallback: bool = False) -> dict:
+    """Create one song and wait until it is ready. Returns {"url", "duration_ms", "task_id", "provider"}.
+
+    melody_id / reference_id come from upload_audio() and turn this into a remix of that audio.
+    With fallback, a WaveSpeed outage falls through to Mureka's own API when a key for it is configured."""
     if getattr(cfg, "song_provider", "mureka") == "wavespeed":
-        return _generate_wavespeed(cfg, lyrics, style, melody_id, reference_id)
+        try:
+            out = _generate_wavespeed(cfg, lyrics, style, melody_id, reference_id)
+            out["provider"] = "wavespeed"
+            return out
+        except MurekaError as exc:
+            if not (fallback and looks_transient(exc) and cfg.mureka_key and not (melody_id or reference_id)):
+                raise
+            log.warning("WaveSpeed is down (%s); going direct to Mureka for this song", exc)
     if melody_id or reference_id:
         raise MurekaError("Remiks hozircha faqat WaveSpeed orqali ishlaydi (SONG_PROVIDER=wavespeed).")
     body = {"lyrics": lyrics, "model": cfg.mureka_model, "prompt": style}
@@ -162,6 +180,7 @@ def generate(cfg, lyrics: str, style: str, melody_id: str = "", reference_id: st
                 "url": choice["url"],
                 "duration_ms": choice.get("duration") or 0,
                 "task_id": task_id,
+                "provider": "mureka",
             }
     raise MurekaError(f"task {task_id} succeeded but has no audio url: {str(task)[:300]}")
 

@@ -293,7 +293,12 @@ class Pipeline:
         if not (job["mp3_path"] and Path(job["mp3_path"]).exists()):
             self._check_budget(job["source"])
             melody_id, reference_id = self._remix_ids(job_id)
-            result = mureka.generate(self.cfg, job["lyrics"], job["style"], melody_id, reference_id)
+            # after half an hour of outages, try the other provider rather than keep waiting
+            stuck = int(self.db.kv_get(f"soft:{job_id}", "0") or 0) >= 3
+            result = mureka.generate(self.cfg, job["lyrics"], job["style"], melody_id, reference_id, fallback=stuck)
+            if stuck and result.get("provider") == "mureka" and self.cfg.song_provider == "wavespeed":
+                self.notify(f"🔁 #{job_id}: WaveSpeed ishlamagani uchun to'g'ridan-to'g'ri Mureka orqali yaratildi "
+                            f"(narxi ~2 barobar qimmat). WaveSpeed tiklangach o'zi qaytadi.")
             self._count_mureka()
             mureka.download(result["url"], mp3)
             try:  # light mastering: even loudness, tighter low end; the untouched file is kept as song_raw.mp3

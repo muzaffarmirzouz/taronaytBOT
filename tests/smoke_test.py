@@ -571,6 +571,35 @@ assert db.get(_tj)["status"] == "queued" and (db.get(_tj)["attempts"] or 0) == 0
 pipe.produce, bot.tg = _real_produce, _old6
 db.update(_tj, status="failed")
 
+# when WaveSpeed is down for a while, the song goes out through Mureka instead
+import dataclasses as _dc3  # noqa: E402
+_cfg_fb = _dc3.replace(cfg, song_provider="wavespeed", wavespeed_key="wk")
+_real_ws = mureka._generate_wavespeed
+def _ws_down(*a, **k):
+    raise mureka.MurekaError("task abc ended with status 'failed': Upstream service couldn't complete this request")
+mureka._generate_wavespeed = _ws_down
+try:
+    mureka.generate(_cfg_fb, "[Verse]\nhi", "pop")  # no fallback asked for: the error stands
+    raise AssertionError("should have raised")
+except mureka.MurekaError:
+    pass
+_fb = mureka.generate(_cfg_fb, "[Verse]\nhi", "pop", fallback=True)
+assert _fb["provider"] == "mureka" and _fb["url"], _fb
+# a remix cannot fall back: Mureka's own API has no melody id from WaveSpeed
+try:
+    mureka.generate(_cfg_fb, "[Verse]\nhi", "pop", melody_id="mel-42", fallback=True)
+    raise AssertionError("a remix must not fall back")
+except mureka.MurekaError:
+    pass
+# a real error is never a reason to switch providers
+mureka._generate_wavespeed = lambda *a, **k: (_ for _ in ()).throw(mureka.MurekaError("generate failed 400: bad lyrics"))
+try:
+    mureka.generate(_cfg_fb, "[Verse]\nhi", "pop", fallback=True)
+    raise AssertionError("should have raised")
+except mureka.MurekaError as _e:
+    assert "400" in str(_e)
+mureka._generate_wavespeed = _real_ws
+
 # photo mode: the owner's picture + weather effects (rain, tears, wind, snow)
 from PIL import Image as _PI  # noqa: E402
 from app import photofx as _pfx  # noqa: E402
